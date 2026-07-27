@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect x="25" y="25" width="1230" height="670" rx="30" fill="none" stroke="#f43f5e" stroke-width="12"/>
+  <path d="M 640 40 C 620 20, 580 20, 560 40 C 540 60, 560 90, 640 140 C 720 90, 740 60, 720 40 C 700 20, 660 20, 640 40 Z" fill="#f43f5e"/>
+  <text x="640" y="680" font-family="sans-serif" font-size="28" font-weight="bold" fill="#f43f5e" text-anchor="middle">❤️ Forever &amp; Always ❤️</text>
+</svg>

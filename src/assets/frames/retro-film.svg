@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect x="0" y="0" width="1280" height="60" fill="#18181b"/>
+  <rect x="0" y="660" width="1280" height="60" fill="#18181b"/>
+  <!-- Film Sprocket Holes -->
+  <g fill="#ffffff">
+    <rect x="40" y="15" width="40" height="30" rx="4"/>
+    <rect x="140" y="15" width="40" height="30" rx="4"/>
+    <rect x="240" y="15" width="40" height="30" rx="4"/>
+    <rect x="340" y="15" width="40" height="30" rx="4"/>
+    <rect x="440" y="15" width="40" height="30" rx="4"/>
+    <rect x="540" y="15" width="40" height="30" rx="4"/>
+    <rect x="640" y="15" width="40" height="30" rx="4"/>
+    <rect x="740" y="15" width="40" height="30" rx="4"/>
+    <rect x="840" y="15" width="40" height="30" rx="4"/>
+    <rect x="940" y="15" width="40" height="30" rx="4"/>
+    <rect x="1040" y="15" width="40" height="30" rx="4"/>
+    <rect x="1140" y="15" width="40" height="30" rx="4"/>
+
+    <rect x="40" y="675" width="40" height="30" rx="4"/>
+    <rect x="140" y="675" width="40" height="30" rx="4"/>
+    <rect x="240" y="675" width="40" height="30" rx="4"/>
+    <rect x="340" y="675" width="40" height="30" rx="4"/>
+    <rect x="440" y="675" width="40" height="30" rx="4"/>
+    <rect x="540" y="675" width="40" height="30" rx="4"/>
+    <rect x="640" y="675" width="40" height="30" rx="4"/>
+    <rect x="740" y="675" width="40" height="30" rx="4"/>
+    <rect x="840" y="675" width="40" height="30" rx="4"/>
+    <rect x="940" y="675" width="40" height="30" rx="4"/>
+    <rect x="1040" y="675" width="40" height="30" rx="4"/>
+    <rect x="1140" y="675" width="40" height="30" rx="4"/>
+  </g>
+</svg>
