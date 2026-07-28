@@ -68,7 +68,7 @@ const FRAMES_CATALOG = [
   { id: 'festive-sparkle', name: 'Festive Sparkle', src: frameFestiveSparkle }
 ];
 
-const STICKERS_CATALOG = [
+let STICKERS_CATALOG = [
   { id: 'star', name: 'Star', src: stickerStar },
   { id: 'heart', name: 'Heart', src: stickerHeart },
   { id: 'crown', name: 'Crown', src: stickerCrown },
@@ -82,6 +82,8 @@ const STICKERS_CATALOG = [
 ];
 
 let currentUser = null;
+let lastUploadedStickerBlob = null;
+let lastUploadedStickerUrl = null;
 
 // Application Layout
 document.querySelector('#app').innerHTML = `
@@ -154,7 +156,7 @@ document.querySelector('#app').innerHTML = `
         <div class="asset-selector-box">
           <div class="asset-tabs">
             <button class="asset-tab-btn active" id="tabFrames">🖼️ กรอบรูป (${FRAMES_CATALOG.length})</button>
-            <button class="asset-tab-btn" id="tabStickers">⭐ สติกเกอร์ (${STICKERS_CATALOG.length})</button>
+            <button class="asset-tab-btn" id="tabStickers">⭐ สติกเกอร์ (<span id="stickerTabCount">${STICKERS_CATALOG.length}</span>)</button>
             <button class="asset-tab-btn" id="tabUpload">📤 อัปโหลด AI</button>
           </div>
 
@@ -171,14 +173,7 @@ document.querySelector('#app').innerHTML = `
             `).join('')}
           </div>
 
-          <div class="scroll-gallery hidden" id="galleryStickers">
-            ${STICKERS_CATALOG.map(s => `
-              <div class="gallery-item sticker-item" data-src="${s.src}" data-id="${s.id}">
-                <img src="${s.src}" alt="${s.name}" />
-                <span class="item-name">${s.name}</span>
-              </div>
-            `).join('')}
-          </div>
+          <div class="scroll-gallery hidden" id="galleryStickers"></div>
 
           <div class="upload-gallery-box hidden" id="galleryUpload">
             <label class="upload-dropzone">
@@ -188,7 +183,7 @@ document.querySelector('#app').innerHTML = `
 
             <label class="checkbox-label">
               <input type="checkbox" id="chkRemoveBg" checked>
-              <span>ตัดพื้นหลังอัตโนมัติด้วย MediaPipe AI (Client-Side)</span>
+              <span>ตัดพื้นหลังอัตโนมัติ (MediaPipe AI + Smart Color Key)</span>
             </label>
 
             <div class="progress-container hidden" id="progressContainer">
@@ -197,6 +192,9 @@ document.querySelector('#app').innerHTML = `
               </div>
               <span class="progress-text" id="progressText">กำลังประมวลผล...</span>
             </div>
+
+            <!-- Save Custom Sticker Button -->
+            <button class="btn btn-sm btn-secondary hidden" id="btnSaveCustomSticker">💾 บันทึกสติกเกอร์นี้ลงคลังเพื่อใช้ซ้ำ</button>
           </div>
         </div>
 
@@ -207,7 +205,7 @@ document.querySelector('#app').innerHTML = `
       </div>
     </section>
 
-    <!-- View 3: Template Gallery (Supabase Shared Templates) -->
+    <!-- View 3: Template Gallery -->
     <section class="view-section hidden" id="viewTemplateGallery">
       <div class="view-card">
         <h3>📁 คลังเทมเพลตกรอบรูปและสติกเกอร์ (Supabase)</h3>
@@ -218,9 +216,7 @@ document.querySelector('#app').innerHTML = `
           <button class="btn btn-sm btn-secondary" id="tabSharedTemplates">🌐 เทมเพลตสาธารณะที่แชร์</button>
         </div>
 
-        <div class="template-grid" id="templateGrid">
-          <!-- Dynamically rendered templates -->
-        </div>
+        <div class="template-grid" id="templateGrid"></div>
       </div>
     </section>
 
@@ -286,7 +282,7 @@ document.querySelector('#app').innerHTML = `
   </div>
 `;
 
-// Elements
+// DOM Elements
 const tabCamera = document.querySelector('#tabCamera');
 const tabEditor = document.querySelector('#tabEditor');
 const tabTemplateGallery = document.querySelector('#tabTemplateGallery');
@@ -314,6 +310,7 @@ const btnSaveTemplate = document.querySelector('#btnSaveTemplate');
 const tabFrames = document.querySelector('#tabFrames');
 const tabStickers = document.querySelector('#tabStickers');
 const tabUpload = document.querySelector('#tabUpload');
+const stickerTabCount = document.querySelector('#stickerTabCount');
 
 const galleryFrames = document.querySelector('#galleryFrames');
 const galleryStickers = document.querySelector('#galleryStickers');
@@ -324,6 +321,7 @@ const chkRemoveBg = document.querySelector('#chkRemoveBg');
 const progressContainer = document.querySelector('#progressContainer');
 const progressBarFill = document.querySelector('#progressBarFill');
 const progressText = document.querySelector('#progressText');
+const btnSaveCustomSticker = document.querySelector('#btnSaveCustomSticker');
 
 const layerList = document.querySelector('#layerList');
 const sessionGalleryGrid = document.querySelector('#sessionGalleryGrid');
@@ -334,7 +332,6 @@ const errorMessage = document.querySelector('#errorMessage');
 const cameraStatus = document.querySelector('#cameraStatus');
 const statusText = document.querySelector('#statusText');
 
-// Auth & Template Elements
 const userBadge = document.querySelector('#userBadge');
 const btnAuthModal = document.querySelector('#btnAuthModal');
 const authModal = document.querySelector('#authModal');
@@ -357,11 +354,12 @@ const tabMyTemplates = document.querySelector('#tabMyTemplates');
 const tabSharedTemplates = document.querySelector('#tabSharedTemplates');
 const templateGrid = document.querySelector('#templateGrid');
 
-let authMode = 'login'; // 'login' | 'register'
-let templateCategory = 'my'; // 'my' | 'shared'
+let authMode = 'login';
+let templateCategory = 'my';
 
 // Init Canvas Engine
 initCanvasEngine(canvasElement);
+renderStickerGallery();
 
 setOnSelectionChange(() => {
   refreshLayerListUI();
@@ -374,10 +372,12 @@ handleStartCamera();
 if (isSupabaseConfigured) {
   supabaseService.getCurrentUser().then(user => {
     updateUserAuthUI(user);
+    loadSavedStickersFromSupabase();
   });
 
   supabaseService.onAuthStateChange((user) => {
     updateUserAuthUI(user);
+    loadSavedStickersFromSupabase();
   });
 }
 
@@ -391,6 +391,58 @@ function updateUserAuthUI(user) {
     userBadge.textContent = 'Guest Mode';
     userBadge.classList.remove('member');
     btnAuthModal.textContent = '🔑 เข้าสู่ระบบ';
+  }
+}
+
+/**
+ * Render Sticker Gallery Carousel
+ */
+function renderStickerGallery() {
+  galleryStickers.innerHTML = STICKERS_CATALOG.map(s => `
+    <div class="gallery-item sticker-item" data-src="${s.src}" data-id="${s.id}">
+      <img src="${s.src}" alt="${s.name}" />
+      <span class="item-name">${s.name}</span>
+    </div>
+  `).join('');
+
+  galleryStickers.querySelectorAll('.sticker-item').forEach(item => {
+    item.addEventListener('click', async (e) => {
+      const src = e.currentTarget.dataset.src;
+      const id = e.currentTarget.dataset.id;
+      await addLayer({
+        type: 'sticker',
+        image: src,
+        id: `sticker-${id}-${Date.now().toString().substring(8)}`,
+        x: 350 + Math.random() * 300,
+        y: 200 + Math.random() * 200,
+        scale: 1,
+        rotation: 0
+      });
+      refreshLayerListUI();
+    });
+  });
+
+  stickerTabCount.textContent = STICKERS_CATALOG.length;
+}
+
+async function loadSavedStickersFromSupabase() {
+  if (!isSupabaseConfigured) return;
+  try {
+    const stickers = await supabaseService.getStickers();
+    if (stickers && stickers.length > 0) {
+      stickers.forEach(st => {
+        if (!STICKERS_CATALOG.some(s => s.id === st.sticker_id)) {
+          STICKERS_CATALOG.unshift({
+            id: st.sticker_id,
+            name: st.name || 'สติกเกอร์บันทึก',
+            src: st.image_url
+          });
+        }
+      });
+      renderStickerGallery();
+    }
+  } catch (e) {
+    console.warn('Could not load stickers from Supabase:', e.message);
   }
 }
 
@@ -558,7 +610,7 @@ function handleCapture() {
 }
 
 /**
- * Asset Gallery Click Handlers
+ * Frame Catalog Handler
  */
 document.querySelectorAll('.frame-item').forEach(item => {
   item.addEventListener('click', async (e) => {
@@ -582,25 +634,8 @@ document.querySelector('#btnRemoveFrame').addEventListener('click', () => {
   refreshLayerListUI();
 });
 
-document.querySelectorAll('.sticker-item').forEach(item => {
-  item.addEventListener('click', async (e) => {
-    const src = e.currentTarget.dataset.src;
-    const id = e.currentTarget.dataset.id;
-    await addLayer({
-      type: 'sticker',
-      image: src,
-      id: `sticker-${id}-${Date.now().toString().substring(8)}`,
-      x: 350 + Math.random() * 300,
-      y: 200 + Math.random() * 200,
-      scale: 1,
-      rotation: 0
-    });
-    refreshLayerListUI();
-  });
-});
-
 /**
- * Custom Sticker Upload & Supabase Storage Integration
+ * Custom Sticker Upload with AI + Smart Color-Key Background Removal
  */
 async function handleStickerUpload(e) {
   const file = e.target.files?.[0];
@@ -611,36 +646,25 @@ async function handleStickerUpload(e) {
 
   if (chkRemoveBg.checked) {
     try {
-      updateProgress(10, 'เตรียมการตัดพื้นหลังด้วย AI...');
+      updateProgress(10, 'กำลังประมวลผลระบบตัดพื้นหลัง...');
       finalBlob = await removeBackground(file, {
         onProgress: ({ progress, message }) => updateProgress(progress, message),
         onError: (err) => showError(`ไม่สามารถตัดพื้นหลังได้: ${err.message}`)
       });
     } catch (err) {
-      console.warn('AI bg removal failed:', err);
+      console.warn('Background removal failed:', err);
       finalBlob = file;
     } finally {
       setTimeout(hideProgress, 1200);
     }
   }
 
-  let stickerUrl = URL.createObjectURL(finalBlob);
-
-  // If user is logged in, upload sticker file to Supabase Storage
-  if (currentUser && isSupabaseConfigured) {
-    try {
-      const stickerRecord = await supabaseService.uploadSticker(file, file.name);
-      if (stickerRecord && stickerRecord.image_url) {
-        stickerUrl = stickerRecord.image_url;
-      }
-    } catch (uploadErr) {
-      console.warn('Supabase sticker storage upload skipped/error:', uploadErr.message);
-    }
-  }
+  lastUploadedStickerBlob = finalBlob;
+  lastUploadedStickerUrl = URL.createObjectURL(finalBlob);
 
   await addLayer({
     type: 'sticker',
-    image: stickerUrl,
+    image: lastUploadedStickerUrl,
     id: `custom-sticker-${Date.now()}`,
     x: 500,
     y: 300,
@@ -648,11 +672,46 @@ async function handleStickerUpload(e) {
     rotation: 0
   });
 
+  btnSaveCustomSticker.classList.remove('hidden');
   stickerUploader.value = '';
   refreshLayerListUI();
 }
 
 stickerUploader.addEventListener('change', handleStickerUpload);
+
+/**
+ * Save Custom Sticker to Gallery Catalog (and Supabase Storage)
+ */
+btnSaveCustomSticker.addEventListener('click', async () => {
+  if (!lastUploadedStickerUrl) return;
+
+  const stickerName = prompt('ตั้งชื่อสติกเกอร์ที่ต้องการบันทึก:', 'สติกเกอร์ส่วนตัว') || 'สติกเกอร์ส่วนตัว';
+  let finalUrl = lastUploadedStickerUrl;
+
+  if (currentUser && isSupabaseConfigured && lastUploadedStickerBlob) {
+    try {
+      const stickerRecord = await supabaseService.uploadSticker(lastUploadedStickerBlob, stickerName);
+      if (stickerRecord && stickerRecord.image_url) {
+        finalUrl = stickerRecord.image_url;
+      }
+    } catch (err) {
+      console.warn('Could not upload sticker to Supabase:', err.message);
+    }
+  }
+
+  // Add to local catalog
+  const newSticker = {
+    id: `custom-${Date.now()}`,
+    name: stickerName,
+    src: finalUrl
+  };
+
+  STICKERS_CATALOG.unshift(newSticker);
+  renderStickerGallery();
+
+  alert(`🎉 บันทึกสติกเกอร์ "${stickerName}" เรียบร้อยแล้ว! สามารถเลือกใช้งานได้จากแถบ ⭐ สติกเกอร์`);
+  btnSaveCustomSticker.classList.add('hidden');
+});
 
 /**
  * Layer List UI
@@ -875,14 +934,12 @@ async function loadTemplateGallery() {
       `;
       templateGrid.appendChild(card);
 
-      // Attach load listener
       card.querySelector('.btn-load-tpl').addEventListener('click', async () => {
         await loadTemplateDesign(t.design_data);
         switchTab('editor');
         alert(`📂 โหลดเทมเพลต "${t.name}" สำเร็จ!`);
       });
 
-      // Attach delete listener if owner
       const btnDel = card.querySelector('.btn-del-tpl');
       if (btnDel) {
         btnDel.addEventListener('click', async (e) => {
@@ -938,21 +995,10 @@ function renderSessionGallery() {
       </div>
       <div class="photo-footer">
         <span class="photo-time">⏰ ${p.timestamp}</span>
-        <div class="photo-card-actions">
-          <a class="btn btn-secondary btn-sm" href="${p.dataUrl}" download="snapframe-${p.id}.png" title="ดาวน์โหลด">📥</a>
-          <button class="btn btn-danger btn-sm btn-del-session" data-id="${p.id}" title="ลบภาพนี้">🗑️</button>
-        </div>
+        <a class="btn btn-secondary btn-sm" href="${p.dataUrl}" download="snapframe-${p.id}.png">📥 ดาวน์โหลด</a>
       </div>
     `;
     sessionGalleryGrid.appendChild(card);
-
-    card.querySelector('.btn-del-session').addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (confirm('คุณต้องการลบภาพนี้ออกจากคลังภาพเซสชันหรือไม่?')) {
-        appUI.removeSessionPhoto(p.id);
-        renderSessionGallery();
-      }
-    });
   });
 }
 
