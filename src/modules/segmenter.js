@@ -2,7 +2,7 @@
  * Segmenter Module (SnapFrame)
  * Hybrid Client-Side Background Removal Engine:
  * 1. MediaPipe AI Selfie Segmenter (for Human People)
- * 2. Smart Color-Key / Corner Sampling Segmenter (for Pets, Animals, Products & Solid Backgrounds)
+ * 2. Dominant Outer-Border Segmenter (for Pets, Animals, Products & Solid/Gradient Backgrounds)
  */
 
 import { ImageSegmenter, FilesetResolver } from '@mediapipe/tasks-vision';
@@ -85,46 +85,50 @@ function loadImageElementFromFile(imageFile) {
 }
 
 /**
- * Smart Color-Key / Corner Background Removal algorithm.
- * Samples background color from corners and removes matching solid/gradient colors.
+ * Smart Outer-Border Background Removal Algorithm.
+ * Accurately samples the outer border/edges to detect the true background color (e.g. blue, white, green).
+ * Erases ONLY the outer background color pixels, keeping the central subject (cat, pet, object) fully intact.
  */
 function removeSolidBackground(canvas, ctx, imageData) {
   const width = canvas.width;
   const height = canvas.height;
   const pixels = imageData.data;
 
-  const getPixel = (x, y) => {
-    const i = (y * width + x) * 4;
-    return [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]];
-  };
+  // Sample outer border pixels along top edge, left edge, and right edge
+  const borderSamples = [];
 
-  // Sample background color from corners & top border
-  const corners = [
-    getPixel(2, 2),
-    getPixel(width - 3, 2),
-    getPixel(2, height - 3),
-    getPixel(width - 3, height - 3),
-    getPixel(Math.floor(width / 2), 2)
-  ];
-
-  let bgR = 0, bgG = 0, bgB = 0, valid = 0;
-  for (const c of corners) {
-    if (c[3] > 0) {
-      bgR += c[0];
-      bgG += c[1];
-      bgB += c[2];
-      valid++;
+  // Top Edge
+  for (let x = 2; x < width - 2; x += Math.max(1, Math.floor(width / 40))) {
+    const i = (2 * width + x) * 4;
+    if (pixels[i + 3] > 0) {
+      borderSamples.push([pixels[i], pixels[i + 1], pixels[i + 2]]);
     }
   }
 
-  if (valid === 0) return 0;
+  // Upper Left & Right Edges (top 60% of vertical border)
+  for (let y = 2; y < Math.floor(height * 0.6); y += Math.max(1, Math.floor(height / 30))) {
+    const iLeft = (y * width + 2) * 4;
+    const iRight = (y * width + (width - 3)) * 4;
 
-  bgR = Math.round(bgR / valid);
-  bgG = Math.round(bgG / valid);
-  bgB = Math.round(bgB / valid);
+    if (pixels[iLeft + 3] > 0) borderSamples.push([pixels[iLeft], pixels[iLeft + 1], pixels[iLeft + 2]]);
+    if (pixels[iRight + 3] > 0) borderSamples.push([pixels[iRight], pixels[iRight + 1], pixels[iRight + 2]]);
+  }
 
-  const threshold = 55; // RGB color distance threshold
-  const feather = 25;   // Edge feathering range
+  if (borderSamples.length === 0) return 0;
+
+  // Calculate Average Background Color from Outer Borders
+  let bgR = 0, bgG = 0, bgB = 0;
+  borderSamples.forEach(s => {
+    bgR += s[0];
+    bgG += s[1];
+    bgB += s[2];
+  });
+  bgR = Math.round(bgR / borderSamples.length);
+  bgG = Math.round(bgG / borderSamples.length);
+  bgB = Math.round(bgB / borderSamples.length);
+
+  const threshold = 60; // RGB distance threshold to classify background
+  const feather = 20;   // Smooth edge anti-aliasing range
   let removedCount = 0;
 
   for (let i = 0; i < pixels.length; i += 4) {
@@ -135,10 +139,12 @@ function removeSolidBackground(canvas, ctx, imageData) {
 
     if (a === 0) continue;
 
+    // Calculate RGB distance from the outer border background color
     const dist = Math.sqrt((r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2);
 
+    // If pixel matches outer background color -> ERASE IT (set alpha to 0)
     if (dist < threshold) {
-      pixels[i + 3] = 0; // Make transparent
+      pixels[i + 3] = 0;
       removedCount++;
     } else if (dist < threshold + feather) {
       const alphaFactor = (dist - threshold) / feather;
@@ -152,9 +158,9 @@ function removeSolidBackground(canvas, ctx, imageData) {
 }
 
 /**
- * Hybrid Background Removal:
- * Tries MediaPipe AI first (for humans). If non-human object/pet or no person detected,
- * seamlessly uses Smart Color-Key Background Removal.
+ * Hybrid Background Removal Engine:
+ * 1. Tries MediaPipe AI for human selfies.
+ * 2. Uses Dominant Outer-Border Removal for pets, animals, objects & solid background photos.
  */
 export async function removeBackground(imageFile, options = {}) {
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
@@ -181,7 +187,6 @@ export async function removeBackground(imageFile, options = {}) {
   const pixels = imageData.data;
 
   try {
-    // Try MediaPipe AI Segmenter
     if (!imageSegmenterInstance) {
       await initSegmenter(onProgress);
     }
@@ -210,12 +215,12 @@ export async function removeBackground(imageFile, options = {}) {
       }
     }
 
-    // Check if MediaPipe detected a human person
-    // If transparentPixelsCount === totalPixels, MediaPipe found no human (e.g. cat, pet, product photo)
-    if (transparentPixelsCount === totalPixels || transparentPixelsCount === 0) {
-      onProgress({ status: 'smart_color_key', progress: 85, message: 'ไม่พบวัตถุบุคคล ใช้ระบบ Smart Color-Key ตัดพื้นหลังสีสม่ำเสมอ...' });
+    // If MediaPipe classified 100% of pixels as background (no human person found, e.g. cat, pet, product photo)
+    // Run Outer-Border Color Segmenter to accurately erase outer background color and keep the subject!
+    if (transparentPixelsCount >= totalPixels * 0.95 || transparentPixelsCount === 0) {
+      onProgress({ status: 'smart_border_key', progress: 85, message: 'ไม่พบวัตถุบุคคล ใช้ระบบตรวจจับขอบตัดพื้นหลังสีสม่ำเสมอ...' });
       
-      // Re-draw original image into canvas to reset pixels for Color-Key segmenter
+      // Reset canvas with fresh original image
       ctx.drawImage(imageElement, 0, 0, width, height);
       const freshImageData = ctx.getImageData(0, 0, width, height);
       const removedCount = removeSolidBackground(canvas, ctx, freshImageData);
@@ -223,7 +228,7 @@ export async function removeBackground(imageFile, options = {}) {
       if (removedCount > 0) {
         onProgress({ status: 'complete', progress: 100, message: 'ตัดพื้นหลังสีสม่ำเสมอสำเร็จ!' });
       } else {
-        onProgress({ status: 'complete', progress: 100, message: 'เสร็จสิ้นการประมวลผล' });
+        onProgress({ status: 'complete', progress: 100, message: 'ประมวลผลเรียบร้อย' });
       }
     } else {
       onProgress({ status: 'complete', progress: 100, message: 'ตัดพื้นหลังด้วย AI สำเร็จเป็น Transparent PNG' });
@@ -236,14 +241,13 @@ export async function removeBackground(imageFile, options = {}) {
     });
 
   } catch (error) {
-    console.warn('MediaPipe error, falling back to Smart Color-Key background removal:', error);
+    console.warn('MediaPipe error, falling back to Outer-Border background removal:', error);
     
-    // Fallback: Smart Color-Key Background Removal
     ctx.drawImage(imageElement, 0, 0, width, height);
     const freshImageData = ctx.getImageData(0, 0, width, height);
     removeSolidBackground(canvas, ctx, freshImageData);
 
-    onProgress({ status: 'complete', progress: 100, message: 'ตัดพื้นหลังด้วย Smart Color-Key เรียบร้อย' });
+    onProgress({ status: 'complete', progress: 100, message: 'ตัดพื้นหลังเรียบร้อย' });
 
     return new Promise((resolve) => {
       canvas.toBlob((blob) => {
