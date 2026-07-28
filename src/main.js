@@ -181,10 +181,20 @@ document.querySelector('#app').innerHTML = `
               <input type="file" id="stickerUploader" accept="image/*" class="hidden-input">
             </label>
 
+            <div class="mode-selector-box">
+              <label class="select-label">
+                <span>🤖 โหมดตัดพื้นหลัง AI:</span>
+                <select id="selectSegmenterEngine" class="select-input">
+                  <option value="onnx_ai">🤖 AI ตัดวัตถุ/น้องแมว/คน (ONNX Neural Engine)</option>
+                  <option value="color_key">🎨 ตัดพื้นหลังสีสม่ำเสมอ (Smart Color Key)</option>
+                </select>
+              </label>
+            </div>
+
             <div class="checkbox-group">
               <label class="checkbox-label">
                 <input type="checkbox" id="chkRemoveBg" checked>
-                <span>ตัดพื้นหลังอัตโนมัติ (Top-Corner Color Auto Cut)</span>
+                <span>เปิดใช้งานระบบตัดพื้นหลังอัตโนมัติ</span>
               </label>
 
               <label class="checkbox-label">
@@ -324,6 +334,7 @@ const galleryStickers = document.querySelector('#galleryStickers');
 const galleryUpload = document.querySelector('#galleryUpload');
 
 const stickerUploader = document.querySelector('#stickerUploader');
+const selectSegmenterEngine = document.querySelector('#selectSegmenterEngine');
 const chkRemoveBg = document.querySelector('#chkRemoveBg');
 const chkInvertBg = document.querySelector('#chkInvertBg');
 const progressContainer = document.querySelector('#progressContainer');
@@ -643,7 +654,7 @@ document.querySelector('#btnRemoveFrame').addEventListener('click', () => {
 });
 
 /**
- * Custom Sticker Upload with AI + Smart Color-Key Background Removal
+ * Custom Sticker Upload with Multi-Engine AI (ONNX + Smart Color Key)
  */
 async function handleStickerUpload(e) {
   const file = e.target.files?.[0];
@@ -654,8 +665,11 @@ async function handleStickerUpload(e) {
 
   if (chkRemoveBg.checked) {
     try {
-      updateProgress(10, 'กำลังประมวลผลระบบตัดพื้นหลัง...');
+      const selectedEngine = selectSegmenterEngine ? selectSegmenterEngine.value : 'onnx_ai';
+      updateProgress(10, 'กำลังเตรียมการตัดพื้นหลังด้วย AI...');
+
       finalBlob = await removeBackground(file, {
+        mode: selectedEngine,
         invertCut: chkInvertBg ? chkInvertBg.checked : false,
         onProgress: ({ progress, message }) => updateProgress(progress, message),
         onError: (err) => showError(`ไม่สามารถตัดพื้นหลังได้: ${err.message}`)
@@ -708,7 +722,6 @@ btnSaveCustomSticker.addEventListener('click', async () => {
     }
   }
 
-  // Add to local catalog
   const newSticker = {
     id: `custom-${Date.now()}`,
     name: stickerName,
