@@ -181,10 +181,17 @@ document.querySelector('#app').innerHTML = `
               <input type="file" id="stickerUploader" accept="image/*" class="hidden-input">
             </label>
 
-            <label class="checkbox-label">
-              <input type="checkbox" id="chkRemoveBg" checked>
-              <span>ตัดพื้นหลังอัตโนมัติ (MediaPipe AI + Smart Color Key)</span>
-            </label>
+            <div class="checkbox-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="chkRemoveBg" checked>
+                <span>ตัดพื้นหลังอัตโนมัติ (Top-Corner Color Auto Cut)</span>
+              </label>
+
+              <label class="checkbox-label">
+                <input type="checkbox" id="chkInvertBg">
+                <span>🔄 สลับส่วนที่ลบ (Invert Mask Cut)</span>
+              </label>
+            </div>
 
             <div class="progress-container hidden" id="progressContainer">
               <div class="progress-bar-bg">
@@ -318,6 +325,7 @@ const galleryUpload = document.querySelector('#galleryUpload');
 
 const stickerUploader = document.querySelector('#stickerUploader');
 const chkRemoveBg = document.querySelector('#chkRemoveBg');
+const chkInvertBg = document.querySelector('#chkInvertBg');
 const progressContainer = document.querySelector('#progressContainer');
 const progressBarFill = document.querySelector('#progressBarFill');
 const progressText = document.querySelector('#progressText');
@@ -648,6 +656,7 @@ async function handleStickerUpload(e) {
     try {
       updateProgress(10, 'กำลังประมวลผลระบบตัดพื้นหลัง...');
       finalBlob = await removeBackground(file, {
+        invertCut: chkInvertBg ? chkInvertBg.checked : false,
         onProgress: ({ progress, message }) => updateProgress(progress, message),
         onError: (err) => showError(`ไม่สามารถตัดพื้นหลังได้: ${err.message}`)
       });
