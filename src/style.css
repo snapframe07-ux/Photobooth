@@ -432,29 +432,17 @@ body {
   gap: 0.3rem;
 }
 
-.select-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  font-size: 0.8rem;
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.select-input {
-  background: var(--bg-card-glow);
+.ai-engine-badge {
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #fff;
-  padding: 0.5rem 0.8rem;
   border-radius: 8px;
-  font-size: 0.85rem;
-  outline: none;
-  cursor: pointer;
-}
-
-.select-input option {
-  background: #1e1e2e;
+  padding: 0.55rem 0.85rem;
   color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 .checkbox-label {

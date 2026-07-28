@@ -182,24 +182,15 @@ document.querySelector('#app').innerHTML = `
             </label>
 
             <div class="mode-selector-box">
-              <label class="select-label">
-                <span>🤖 โหมดตัดพื้นหลัง AI:</span>
-                <select id="selectSegmenterEngine" class="select-input">
-                  <option value="onnx_ai">🤖 AI ตัดวัตถุ/น้องแมว/คน (ONNX Neural Engine)</option>
-                  <option value="color_key">🎨 ตัดพื้นหลังสีสม่ำเสมอ (Smart Color Key)</option>
-                </select>
-              </label>
+              <div class="ai-engine-badge">
+                🤖 AI ตัดวัตถุ/น้องแมว/คน (ONNX Neural Engine)
+              </div>
             </div>
 
             <div class="checkbox-group">
               <label class="checkbox-label">
                 <input type="checkbox" id="chkRemoveBg" checked>
                 <span>เปิดใช้งานระบบตัดพื้นหลังอัตโนมัติ</span>
-              </label>
-
-              <label class="checkbox-label">
-                <input type="checkbox" id="chkInvertBg">
-                <span>🔄 สลับส่วนที่ลบ (Invert Mask Cut)</span>
               </label>
             </div>
 
@@ -665,12 +656,9 @@ async function handleStickerUpload(e) {
 
   if (chkRemoveBg.checked) {
     try {
-      const selectedEngine = selectSegmenterEngine ? selectSegmenterEngine.value : 'onnx_ai';
       updateProgress(10, 'กำลังเตรียมการตัดพื้นหลังด้วย AI...');
 
       finalBlob = await removeBackground(file, {
-        mode: selectedEngine,
-        invertCut: chkInvertBg ? chkInvertBg.checked : false,
         onProgress: ({ progress, message }) => updateProgress(progress, message),
         onError: (err) => showError(`ไม่สามารถตัดพื้นหลังได้: ${err.message}`)
       });
