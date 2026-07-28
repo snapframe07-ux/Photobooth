@@ -115,6 +115,28 @@ export class SupabaseService {
   }
 
   /**
+   * Ensures a row exists in public.users for the current auth user.
+   * This is required because templates.user_id FK references public.users(user_id).
+   * If the row is missing (e.g. signup trigger not configured), this upserts it.
+   */
+  async ensureUserRecord(user) {
+    if (!user) return;
+    try {
+      const { error } = await supabase
+        .from('users')
+        .upsert(
+          { user_id: user.id, email: user.email, created_at: new Date().toISOString() },
+          { onConflict: 'user_id', ignoreDuplicates: true }
+        );
+      if (error) {
+        console.warn('ensureUserRecord upsert warning:', error.message);
+      }
+    } catch (e) {
+      console.warn('ensureUserRecord failed silently:', e.message);
+    }
+  }
+
+  /**
    * --- Template CRUD Methods ---
    */
 
@@ -127,6 +149,9 @@ export class SupabaseService {
     if (!name || !name.trim()) {
       throw new Error('กรุณาระบุชื่อเทมเพลต');
     }
+
+    // Guarantee user row exists in public.users before FK-constrained insert
+    await this.ensureUserRecord(user);
 
     const cleanedDesignData = {
       ...designData,
