@@ -8,7 +8,6 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
-// Fallback warning if environment variables are not configured yet
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&
   supabaseAnonKey &&
@@ -20,6 +19,18 @@ export const supabase = createClient(
   supabaseUrl || 'https://placeholder.supabase.co',
   supabaseAnonKey || 'placeholder-key'
 );
+
+/**
+ * Normalizes Supabase API Errors (e.g. missing table schema errors)
+ */
+function handleSupabaseError(error, defaultMsg) {
+  if (!error) return;
+  const msg = error.message || '';
+  if (msg.includes('Could not find the table') || msg.includes('schema cache')) {
+    return new Error("⚠️ ยังไม่ได้สร้างตารางในฐานข้อมูล Supabase (โปรดนำโค้ดจากไฟล์ supabase_schema.sql ไปรันใน Supabase SQL Editor)");
+  }
+  return new Error(`${defaultMsg}: ${msg}`);
+}
 
 export class SupabaseService {
   /**
@@ -39,11 +50,13 @@ export class SupabaseService {
 
     // Sync profile to public.users table
     if (data.user) {
-      await supabase.from('users').upsert({
-        user_id: data.user.id,
-        email: data.user.email,
-        created_at: new Date().toISOString()
-      }, { onConflict: 'user_id' });
+      try {
+        await supabase.from('users').upsert({
+          user_id: data.user.id,
+          email: data.user.email,
+          created_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+      } catch (_) {}
     }
 
     return data.user;
@@ -61,12 +74,13 @@ export class SupabaseService {
 
     if (error) throw new Error(error.message);
 
-    // Ensure user record exists
     if (data.user) {
-      await supabase.from('users').upsert({
-        user_id: data.user.id,
-        email: data.user.email
-      }, { onConflict: 'user_id' });
+      try {
+        await supabase.from('users').upsert({
+          user_id: data.user.id,
+          email: data.user.email
+        }, { onConflict: 'user_id' });
+      } catch (_) {}
     }
 
     return data.user;
@@ -80,22 +94,28 @@ export class SupabaseService {
 
   async getCurrentUser() {
     if (!isSupabaseConfigured) return null;
-    const { data: { user } } = await supabase.auth.getUser();
-    return user;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      return user;
+    } catch (_) {
+      return null;
+    }
   }
 
   onAuthStateChange(callback) {
     if (!isSupabaseConfigured) return { unsubscribe: () => {} };
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      callback(session?.user || null, event);
-    });
-    return subscription;
+    try {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        callback(session?.user || null, event);
+      });
+      return subscription;
+    } catch (_) {
+      return { unsubscribe: () => {} };
+    }
   }
 
   /**
-   * --- Template CRUD & Sharing Methods ---
-   * Privacy Note: Saves ONLY design metadata (positions, scale, sticker/frame URLs).
-   * NO webcam photo capture data is ever sent to Supabase.
+   * --- Template CRUD Methods ---
    */
 
   async saveTemplate({ name, designData, coverImageUrl = null, isShared = false }) {
@@ -108,11 +128,9 @@ export class SupabaseService {
       throw new Error('กรุณาระบุชื่อเทมเพลต');
     }
 
-    // Clean designData to ensure zero photo captures are included
     const cleanedDesignData = {
       ...designData,
       layers: (designData.layers || []).map(layer => {
-        // Strip out base layer image data / blobs
         if (layer.type === 'base') {
           return {
             id: layer.id,
@@ -142,7 +160,9 @@ export class SupabaseService {
       .select()
       .single();
 
-    if (error) throw new Error(`ไม่สามารถบันทึกเทมเพลตได้: ${error.message}`);
+    if (error) {
+      throw handleSupabaseError(error, 'ไม่สามารถบันทึกเทมเพลตได้');
+    }
     return data;
   }
 
@@ -156,7 +176,9 @@ export class SupabaseService {
       .eq('user_id', user.id)
       .order('created_at', { ascending: false });
 
-    if (error) throw new Error(`ไม่สามารถดึงข้อมูลเทมเพลตของคุณได้: ${error.message}`);
+    if (error) {
+      throw handleSupabaseError(error, 'ไม่สามารถดึงข้อมูลเทมเพลตของคุณได้');
+    }
     return data || [];
   }
 
@@ -169,7 +191,9 @@ export class SupabaseService {
       .eq('is_shared', true)
       .order('created_at', { ascending: false });
 
-    if (error) throw new Error(`ไม่สามารถดึงเทมเพลตสาธารณะได้: ${error.message}`);
+    if (error) {
+      throw handleSupabaseError(error, 'ไม่สามารถดึงเทมเพลตสาธารณะได้');
+    }
     return data || [];
   }
 
@@ -183,7 +207,9 @@ export class SupabaseService {
       .eq('template_id', templateId)
       .eq('user_id', user.id);
 
-    if (error) throw new Error(`ไม่สามารถลบเทมเพลตได้: ${error.message}`);
+    if (error) {
+      throw handleSupabaseError(error, 'ไม่สามารถลบเทมเพลตได้');
+    }
   }
 
   /**
@@ -207,7 +233,7 @@ export class SupabaseService {
       });
 
     if (uploadError) {
-      throw new Error(`อัปโหลดไฟล์สติกเกอร์ขัดข้อง: ${uploadError.message}`);
+      throw handleSupabaseError(uploadError, 'อัปโหลดไฟล์สติกเกอร์ขัดข้อง');
     }
 
     const { data: { publicUrl } } = supabase
@@ -215,7 +241,6 @@ export class SupabaseService {
       .from('stickers')
       .getPublicUrl(filePath);
 
-    // Save record to stickers table
     const { data, error: dbError } = await supabase
       .from('stickers')
       .insert({
@@ -228,7 +253,9 @@ export class SupabaseService {
       .select()
       .single();
 
-    if (dbError) throw new Error(`บันทึกข้อมูลสติกเกอร์ขัดข้อง: ${dbError.message}`);
+    if (dbError) {
+      throw handleSupabaseError(dbError, 'บันทึกข้อมูลสติกเกอร์ขัดข้อง');
+    }
     return data;
   }
 
@@ -240,7 +267,9 @@ export class SupabaseService {
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (error) throw new Error(`ดึงข้อมูลสติกเกอร์ขัดข้อง: ${error.message}`);
+    if (error) {
+      throw handleSupabaseError(error, 'ดึงข้อมูลสติกเกอร์ขัดข้อง');
+    }
     return data || [];
   }
 }
