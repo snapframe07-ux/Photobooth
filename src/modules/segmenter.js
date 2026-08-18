@@ -1,12 +1,10 @@
 /**
  * Segmenter Module (SnapFrame)
- * Multi-Engine AI & Color-Key Background Removal System:
- * 1. AI Neural Network Object Segmenter (@imgly/background-removal ONNX Web) - Cuts out ANY object, cat 🐱, dog 🐶, item, or person!
- * 2. MediaPipe Selfie Segmenter - Fast human selfie segmentation.
- * 3. Smart Outer-Border Color Segmenter - Instant color keying for solid/gradient backgrounds.
+ * Hybrid Client-Side Background Removal Engine:
+ * 1. MediaPipe AI Selfie Segmenter (for Human People)
+ * 2. Dominant Outer-Border Segmenter (for Pets, Animals, Products & Solid/Gradient Backgrounds)
  */
 
-import { removeBackground as removeBackgroundImgly } from '@imgly/background-removal';
 import { ImageSegmenter, FilesetResolver } from '@mediapipe/tasks-vision';
 
 let imageSegmenterInstance = null;
@@ -87,52 +85,50 @@ function loadImageElementFromFile(imageFile) {
 }
 
 /**
- * Top-Corner Background Removal Algorithm.
- * Samples ONLY top-left and top-right extreme corners to guarantee picking the true background color.
+ * Smart Outer-Border Background Removal Algorithm.
+ * Accurately samples the outer border/edges to detect the true background color (e.g. blue, white, green).
+ * Erases ONLY the outer background color pixels, keeping the central subject (cat, pet, object) fully intact.
  */
-export function removeSolidBackground(canvas, ctx, imageData, options = {}) {
+function removeSolidBackground(canvas, ctx, imageData) {
   const width = canvas.width;
   const height = canvas.height;
   const pixels = imageData.data;
 
-  let bgR = 0, bgG = 0, bgB = 0;
+  // Sample outer border pixels along top edge, left edge, and right edge
+  const borderSamples = [];
 
-  if (options.targetBgColor && Array.isArray(options.targetBgColor)) {
-    [bgR, bgG, bgB] = options.targetBgColor;
-  } else {
-    const topCornerSamples = [];
-    const getPixel = (x, y) => {
-      const i = (y * width + x) * 4;
-      return [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]];
-    };
-
-    for (let dy = 2; dy < Math.min(20, height / 10); dy += 3) {
-      for (let dx = 2; dx < Math.min(20, width / 10); dx += 3) {
-        topCornerSamples.push(getPixel(dx, dy));
-        topCornerSamples.push(getPixel(width - 1 - dx, dy));
-      }
+  // Top Edge
+  for (let x = 2; x < width - 2; x += Math.max(1, Math.floor(width / 40))) {
+    const i = (2 * width + x) * 4;
+    if (pixels[i + 3] > 0) {
+      borderSamples.push([pixels[i], pixels[i + 1], pixels[i + 2]]);
     }
-
-    let sumR = 0, sumG = 0, sumB = 0, count = 0;
-    topCornerSamples.forEach(c => {
-      if (c[3] > 0) {
-        sumR += c[0];
-        sumG += c[1];
-        sumB += c[2];
-        count++;
-      }
-    });
-
-    if (count === 0) return 0;
-
-    bgR = Math.round(sumR / count);
-    bgG = Math.round(sumG / count);
-    bgB = Math.round(sumB / count);
   }
 
-  const threshold = options.threshold || 65;
-  const feather = options.feather || 25;
-  const invert = Boolean(options.invertCut);
+  // Upper Left & Right Edges (top 60% of vertical border)
+  for (let y = 2; y < Math.floor(height * 0.6); y += Math.max(1, Math.floor(height / 30))) {
+    const iLeft = (y * width + 2) * 4;
+    const iRight = (y * width + (width - 3)) * 4;
+
+    if (pixels[iLeft + 3] > 0) borderSamples.push([pixels[iLeft], pixels[iLeft + 1], pixels[iLeft + 2]]);
+    if (pixels[iRight + 3] > 0) borderSamples.push([pixels[iRight], pixels[iRight + 1], pixels[iRight + 2]]);
+  }
+
+  if (borderSamples.length === 0) return 0;
+
+  // Calculate Average Background Color from Outer Borders
+  let bgR = 0, bgG = 0, bgB = 0;
+  borderSamples.forEach(s => {
+    bgR += s[0];
+    bgG += s[1];
+    bgB += s[2];
+  });
+  bgR = Math.round(bgR / borderSamples.length);
+  bgG = Math.round(bgG / borderSamples.length);
+  bgB = Math.round(bgB / borderSamples.length);
+
+  const threshold = 60; // RGB distance threshold to classify background
+  const feather = 20;   // Smooth edge anti-aliasing range
   let removedCount = 0;
 
   for (let i = 0; i < pixels.length; i += 4) {
@@ -143,17 +139,14 @@ export function removeSolidBackground(canvas, ctx, imageData, options = {}) {
 
     if (a === 0) continue;
 
+    // Calculate RGB distance from the outer border background color
     const dist = Math.sqrt((r - bgR) ** 2 + (g - bgG) ** 2 + (b - bgB) ** 2);
-    let isBackground = dist < threshold;
 
-    if (invert) {
-      isBackground = !isBackground;
-    }
-
-    if (isBackground) {
+    // If pixel matches outer background color -> ERASE IT (set alpha to 0)
+    if (dist < threshold) {
       pixels[i + 3] = 0;
       removedCount++;
-    } else if (dist < threshold + feather && !invert) {
+    } else if (dist < threshold + feather) {
       const alphaFactor = (dist - threshold) / feather;
       pixels[i + 3] = Math.round(a * alphaFactor);
       removedCount++;
@@ -165,37 +158,11 @@ export function removeSolidBackground(canvas, ctx, imageData, options = {}) {
 }
 
 /**
- * AI Neural Network Object & Pet Segmenter (@imgly/background-removal ONNX Engine)
- * Cuts out ANY object, cat, dog, pet, or human on any complex background!
+ * Hybrid Background Removal Engine:
+ * 1. Tries MediaPipe AI for human selfies.
+ * 2. Uses Dominant Outer-Border Removal for pets, animals, objects & solid background photos.
  */
-export async function removeBackgroundAI(imageFile, options = {}) {
-  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
-
-  try {
-    onProgress({ status: 'onnx_loading', progress: 25, message: 'กำลังประมวลผล AI ตัดวัตถุ/น้องแมว (ONNX Engine)...' });
-
-    const resultBlob = await removeBackgroundImgly(imageFile, {
-      progress: (key, current, total) => {
-        if (total > 0) {
-          const pct = Math.min(95, Math.round(25 + (current / total) * 70));
-          onProgress({ status: 'onnx_processing', progress: pct, message: `กำลังประมวลผล AI: ${Math.round((current / total) * 100)}%` });
-        }
-      }
-    });
-
-    onProgress({ status: 'complete', progress: 100, message: 'ตัดพื้นหลังวัตถุ/น้องแมวด้วย AI สำเร็จเป็น Transparent PNG!' });
-    return resultBlob;
-
-  } catch (error) {
-    console.warn('AI Neural Net object removal fallback to Color/MediaPipe Segmenter:', error);
-    return await removeBackgroundHybrid(imageFile, options);
-  }
-}
-
-/**
- * Hybrid Background Removal Engine
- */
-async function removeBackgroundHybrid(imageFile, options = {}) {
+export async function removeBackground(imageFile, options = {}) {
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
   const onError = typeof options.onError === 'function' ? options.onError : () => {};
 
@@ -217,30 +184,54 @@ async function removeBackgroundHybrid(imageFile, options = {}) {
 
   ctx.drawImage(imageElement, 0, 0, width, height);
   const imageData = ctx.getImageData(0, 0, width, height);
+  const pixels = imageData.data;
 
   try {
-    onProgress({ status: 'processing', progress: 60, message: 'กำลังสแกนและตัดพื้นหลังสีสม่ำเสมอ...' });
+    if (!imageSegmenterInstance) {
+      await initSegmenter(onProgress);
+    }
 
-    const removedCount = removeSolidBackground(canvas, ctx, imageData, options);
+    onProgress({ status: 'processing', progress: 75, message: 'กำลังประมวลผลตัดพื้นหลังด้วย AI...' });
 
-    if (removedCount > 0) {
-      onProgress({ status: 'complete', progress: 100, message: 'ตัดพื้นหลังสีสม่ำเสมอสำเร็จ!' });
+    const result = imageSegmenterInstance.segment(imageElement);
+    let transparentPixelsCount = 0;
+    const totalPixels = width * height;
+
+    if (result && result.categoryMask) {
+      const maskData = result.categoryMask.getAsUint8Array();
+
+      for (let i = 0; i < maskData.length; i++) {
+        const category = maskData[i];
+        if (category === 0) { // Category 0 = Background in MediaPipe
+          pixels[i * 4 + 3] = 0;
+          transparentPixelsCount++;
+        }
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+
+      if (typeof result.categoryMask.close === 'function') {
+        result.categoryMask.close();
+      }
+    }
+
+    // If MediaPipe classified 100% of pixels as background (no human person found, e.g. cat, pet, product photo)
+    // Run Outer-Border Color Segmenter to accurately erase outer background color and keep the subject!
+    if (transparentPixelsCount >= totalPixels * 0.95 || transparentPixelsCount === 0) {
+      onProgress({ status: 'smart_border_key', progress: 85, message: 'ไม่พบวัตถุบุคคล ใช้ระบบตรวจจับขอบตัดพื้นหลังสีสม่ำเสมอ...' });
+      
+      // Reset canvas with fresh original image
+      ctx.drawImage(imageElement, 0, 0, width, height);
+      const freshImageData = ctx.getImageData(0, 0, width, height);
+      const removedCount = removeSolidBackground(canvas, ctx, freshImageData);
+
+      if (removedCount > 0) {
+        onProgress({ status: 'complete', progress: 100, message: 'ตัดพื้นหลังสีสม่ำเสมอสำเร็จ!' });
+      } else {
+        onProgress({ status: 'complete', progress: 100, message: 'ประมวลผลเรียบร้อย' });
+      }
     } else {
-      try {
-        if (!imageSegmenterInstance) {
-          await initSegmenter(onProgress);
-        }
-        const result = imageSegmenterInstance.segment(imageElement);
-        if (result && result.categoryMask) {
-          const pixels = imageData.data;
-          const maskData = result.categoryMask.getAsUint8Array();
-          for (let i = 0; i < maskData.length; i++) {
-            if (maskData[i] === 0) pixels[i * 4 + 3] = 0;
-          }
-          ctx.putImageData(imageData, 0, 0);
-        }
-      } catch (_) {}
-      onProgress({ status: 'complete', progress: 100, message: 'ประมวลผลตัดพื้นหลังเสร็จสิ้น' });
+      onProgress({ status: 'complete', progress: 100, message: 'ตัดพื้นหลังด้วย AI สำเร็จเป็น Transparent PNG' });
     }
 
     return new Promise((resolve) => {
@@ -250,8 +241,12 @@ async function removeBackgroundHybrid(imageFile, options = {}) {
     });
 
   } catch (error) {
-    console.warn('Background removal fallback:', error);
-    removeSolidBackground(canvas, ctx, imageData, options);
+    console.warn('MediaPipe error, falling back to Outer-Border background removal:', error);
+    
+    ctx.drawImage(imageElement, 0, 0, width, height);
+    const freshImageData = ctx.getImageData(0, 0, width, height);
+    removeSolidBackground(canvas, ctx, freshImageData);
+
     onProgress({ status: 'complete', progress: 100, message: 'ตัดพื้นหลังเรียบร้อย' });
 
     return new Promise((resolve) => {
@@ -260,17 +255,4 @@ async function removeBackgroundHybrid(imageFile, options = {}) {
       }, 'image/png');
     });
   }
-}
-
-/**
- * Main Entry Point for Background Removal
- */
-export async function removeBackground(imageFile, options = {}) {
-  // If mode === 'color_key', use Color Keying directly
-  if (options.mode === 'color_key') {
-    return await removeBackgroundHybrid(imageFile, options);
-  }
-
-  // Default to AI Neural Net Object Segmenter (ONNX)
-  return await removeBackgroundAI(imageFile, options);
 }

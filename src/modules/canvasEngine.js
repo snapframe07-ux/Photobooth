@@ -48,6 +48,29 @@ export function initCanvasEngine(canvasElement, options = {}) {
 }
 
 /**
+ * Dynamically switches active target canvas (e.g., between camera preview overlay and main editor canvas).
+ * @param {HTMLCanvasElement} canvasElement
+ */
+export function setTargetCanvas(canvasElement) {
+  if (!canvasElement || !(canvasElement instanceof HTMLCanvasElement)) return;
+  
+  // Remove pointer event listeners from previous canvas if needed
+  if (targetCanvas) {
+    targetCanvas.removeEventListener('pointerdown', handlePointerDown);
+    targetCanvas.removeEventListener('pointermove', handlePointerMove);
+    targetCanvas.removeEventListener('pointerup', handlePointerUp);
+    targetCanvas.removeEventListener('pointercancel', handlePointerUp);
+    targetCanvas.removeEventListener('wheel', handleWheel);
+  }
+
+  targetCanvas = canvasElement;
+  ctx = targetCanvas.getContext('2d');
+  
+  setupPointerEvents();
+  scheduleRender();
+}
+
+/**
  * Sets a callback function when layer selection changes.
  * @param {function(string|null): void} callback 
  */
@@ -106,6 +129,10 @@ export async function captureFrame(videoEl, options = {}) {
     offCtx.scale(-1, 1);
   }
 
+  if (options.filter && options.filter !== 'none') {
+    offCtx.filter = options.filter;
+  }
+
   offCtx.drawImage(videoEl, 0, 0, width, height);
 
   const baseLayer = {
@@ -113,6 +140,50 @@ export async function captureFrame(videoEl, options = {}) {
     type: 'base',
     src: null,
     image: offscreen,
+    x: width / 2,
+    y: height / 2,
+    width: width,
+    height: height,
+    rotation: 0,
+    scale: 1,
+    scaleX: 1,
+    scaleY: 1,
+    opacity: 1,
+    mirror: false
+  };
+
+  const baseIndex = layers.findIndex(l => l.type === 'base');
+  if (baseIndex >= 0) {
+    layers[baseIndex] = baseLayer;
+  } else {
+    layers.unshift(baseLayer);
+  }
+
+  scheduleRender();
+  return baseLayer;
+}
+
+/**
+ * Directly sets an HTMLCanvasElement or HTMLImageElement as the Base Layer (Layer 1).
+ * Used for Photobooth Composite Grids and loading photos into Editor.
+ * @param {HTMLCanvasElement|HTMLImageElement} imageOrCanvas
+ */
+export function setBaseLayerImage(imageOrCanvas) {
+  if (!imageOrCanvas) return null;
+
+  const width = imageOrCanvas.width || (targetCanvas ? targetCanvas.width : 1280);
+  const height = imageOrCanvas.height || (targetCanvas ? targetCanvas.height : 720);
+
+  if (targetCanvas) {
+    targetCanvas.width = width;
+    targetCanvas.height = height;
+  }
+
+  const baseLayer = {
+    id: 'base-layer',
+    type: 'base',
+    src: null,
+    image: imageOrCanvas,
     x: width / 2,
     y: height / 2,
     width: width,

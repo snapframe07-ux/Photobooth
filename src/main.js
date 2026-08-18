@@ -6,18 +6,21 @@ import {
   stopCamera,
   switchCamera,
   startCountdown,
-  getFacingMode
+  getFacingMode,
+  setZoom
 } from './modules/camera.js';
 
 import {
   initCanvasEngine,
   captureFrame,
+  setBaseLayerImage,
   addLayer,
   removeLayer,
   updateLayer,
   selectLayer,
   getSelectedLayerId,
   setOnSelectionChange,
+  setTargetCanvas,
   serializeDesignData,
   loadTemplateDesign,
   downloadImage,
@@ -81,9 +84,30 @@ let STICKERS_CATALOG = [
   { id: 'ribbon-bow', name: 'Red Ribbon', src: stickerRibbonBow }
 ];
 
+const FILTERS_CATALOG = [
+  { id: 'classic', name: 'Classic', css: 'none', class: 'swatch-classic' },
+  { id: 'sunlit', name: 'Sunlit', css: 'sepia(0.35) saturate(1.4) brightness(1.05)', class: 'swatch-sunlit' },
+  { id: 'frost', name: 'Frost', css: 'hue-rotate(180deg) saturate(1.2) brightness(1.1)', class: 'swatch-frost' },
+  { id: 'noir', name: 'Noir', css: 'grayscale(1) contrast(1.2) brightness(0.95)', class: 'swatch-noir' },
+  { id: 'vivid', name: 'Vivid', css: 'saturate(1.8) contrast(1.1)', class: 'swatch-vivid' },
+  { id: 'warm', name: 'Warm', css: 'sepia(0.2) saturate(1.3) hue-rotate(-10deg)', class: 'swatch-warm' },
+  { id: 'vintage', name: 'Vintage', css: 'sepia(0.5) contrast(1.15) brightness(0.9)', class: 'swatch-vintage' }
+];
+
 let currentUser = null;
 let lastUploadedStickerBlob = null;
 let lastUploadedStickerUrl = null;
+
+// Camera Studio State
+let activeFilterIndex = 0;
+let activeTimerSeconds = 3;
+let activeBrightness = 1.0;
+let activeZoom = 1.0;
+let camPreviewLayers = [];  // preview layers (frames/stickers) on camera view
+let camPreviewRAF = null;   // requestAnimationFrame id for preview loop
+let activeBurstCount = 1;
+let isGridActive = false;
+let currentAspectRatio = '4:3';
 
 // Application Layout
 document.querySelector('#app').innerHTML = `
@@ -118,20 +142,151 @@ document.querySelector('#app').innerHTML = `
       <span id="errorMessage"></span>
     </div>
 
-    <!-- View 1: Camera View -->
+    <!-- View 1: Photobooth Studio Camera View (Figma Redesign) -->
     <section class="view-section" id="viewCamera">
-      <div class="view-card">
-        <div class="video-container">
-          <video id="webcam" autoplay playsinline class="mirror"></video>
-          <div class="countdown-overlay" id="countdownOverlay">
-            <span class="countdown-number" id="countdownNumber">3</span>
+      <div class="cam-studio-card">
+        <div class="cam-header-title">กล้องหลัก</div>
+
+        <div class="cam-studio-wrapper">
+          <!-- Film Holes Left & Right -->
+          <div class="film-side-holes left">
+            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
+            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
+            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
+          </div>
+
+          <div class="film-side-holes right">
+            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
+            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
+            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
+          </div>
+
+          <!-- Main Workspace Grid -->
+          <div class="cam-workspace">
+            <!-- Left Panel -->
+            <div class="cam-left-panel">
+              <!-- Aspect Ratio Selector -->
+              <div class="aspect-ratio-group">
+                <button class="btn-aspect-opt active" id="btnAspectActive" title="กดเปลี่ยนอัตราส่วนภาพ">4:3</button>
+                <button class="btn-arrow-toggle" id="btnAspectArrow" title="กดเปลี่ยนอัตราส่วนภาพ">▼</button>
+              </div>
+
+              <!-- Filter Swatches (3 visible at a time) -->
+              <div class="filter-group">
+                <button class="btn-arrow-toggle" id="btnFilterUp">▲</button>
+                <div class="filter-carousel-viewport">
+                  <div class="filter-carousel-track" id="filterCarouselTrack">
+                    <!-- Filter items populated dynamically -->
+                  </div>
+                </div>
+                <button class="btn-arrow-toggle" id="btnFilterDown">▼</button>
+              </div>
+            </div>
+
+            <!-- Center Preview Area -->
+            <div class="cam-center-area">
+              <div class="cam-preview-box" id="previewBox" style="aspect-ratio: 4 / 3;">
+                <video id="webcam" autoplay playsinline class="mirror"></video>
+                <canvas id="camPreviewCanvas"></canvas>
+
+                <!-- Grid 3x3 Overlay -->
+                <div class="cam-grid-overlay" id="camGridOverlay">
+                  <div class="cam-grid-cell"></div><div class="cam-grid-cell"></div><div class="cam-grid-cell"></div>
+                  <div class="cam-grid-cell"></div><div class="cam-grid-cell"></div><div class="cam-grid-cell"></div>
+                  <div class="cam-grid-cell"></div><div class="cam-grid-cell"></div><div class="cam-grid-cell"></div>
+                </div>
+
+                <!-- Countdown Overlay -->
+                <div class="countdown-overlay" id="countdownOverlay">
+                  <span class="countdown-number" id="countdownNumber">3</span>
+                </div>
+
+                <!-- Zoom Ruler Bar -->
+                <div class="zoom-ruler-bar">
+                  <span class="zoom-icon">🔍-</span>
+                  <div class="zoom-ruler-track">
+                    <input type="range" class="zoom-ruler-input" id="zoomSlider" min="1" max="3" step="0.1" value="1">
+                  </div>
+                  <span class="zoom-icon">🔍+</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Panel -->
+            <div class="cam-right-panel">
+              <!-- Timer Selector -->
+              <div class="timer-group">
+                <button class="btn-timer-opt active" id="btnTimerActive">3s</button>
+                <button class="btn-arrow-toggle" id="btnTimerArrow">▼</button>
+              </div>
+
+              <!-- Brightness Slider -->
+              <div class="brightness-group">
+                <span class="brightness-icon">☀️</span>
+                <div class="brightness-slider-wrap">
+                  <input type="range" class="brightness-input" id="brightnessSlider" min="0.5" max="1.5" step="0.05" value="1">
+                </div>
+                <span class="brightness-icon">🔆</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Film Strip Toolbar -->
+          <div class="cam-bottom-filmstrip">
+            <div class="film-holes-horizontal">
+              <div class="film-hole-h"></div><div class="film-hole-h"></div><div class="film-hole-h"></div>
+              <div class="film-hole-h"></div><div class="film-hole-h"></div><div class="film-hole-h"></div>
+            </div>
+
+            <div class="cam-toolbar">
+              <!-- Frame Popup Button -->
+              <button class="btn-tool-icon" id="btnToolFrame" title="เลือกกรอบรูป">
+                🖼️
+              </button>
+
+              <!-- Sticker Popup Button -->
+              <button class="btn-tool-icon" id="btnToolSticker" title="เลือกสติกเกอร์">
+                ⭐
+                <span class="badge-plus">+</span>
+              </button>
+
+              <!-- Shutter / Capture Button -->
+              <button class="btn-shutter-rec" id="btnCapture" title="ถ่ายภาพ">
+                <div class="shutter-inner-dot"></div>
+              </button>
+
+              <!-- Burst Mode Button -->
+              <button class="btn-tool-icon" id="btnToolBurst" title="ถ่ายภาพเรียงต่อกัน">
+                🎞️
+                <span class="badge-count" id="burstBadge">1x</span>
+              </button>
+
+              <!-- Grid Overlay Button -->
+              <button class="btn-tool-icon" id="btnToolGrid" title="เปิด/ปิด Grid">
+                #
+              </button>
+            </div>
           </div>
         </div>
 
-        <div class="action-bar">
-          <button class="btn btn-icon-round" id="btnSwitch" title="สลับกล้อง">🔄</button>
-          <button class="btn btn-shutter" id="btnCapture">📸 ถ่ายภาพ</button>
-          <button class="btn btn-icon-round" id="btnStopCamera" title="ปิดกล้อง">⏹️</button>
+        <!-- Frame Floating Popup Modal -->
+        <div class="cam-popup-modal hidden" id="framePopupModal">
+          <div class="cam-popup-header">
+            <span class="cam-popup-title">🖼️ เลือกกรอบรูปในคลัง Database</span>
+            <button class="btn-popup-action" id="btnGoToEditorFromFrame">🎨 หน้าตกแต่ง / เพิ่มกรอบใหม่</button>
+            <button class="btn-popup-action" id="btnCloseFramePopup">▼ พับหน้าต่าง</button>
+          </div>
+          <div class="cam-popup-grid" id="framePopupGrid"></div>
+        </div>
+
+        <!-- Sticker Floating Popup Modal -->
+        <div class="cam-popup-modal hidden" id="stickerPopupModal">
+          <div class="cam-popup-header">
+            <span class="cam-popup-title">⭐ เลือกสติกเกอร์ในคลัง Database</span>
+            <button class="btn-popup-action" id="btnGoToEditorFromSticker">🎨 หน้าตกแต่ง / เพิ่มสติกเกอร์ใหม่</button>
+            <button class="btn-popup-action" id="btnCloseStickerPopup">▼ พับหน้าต่าง</button>
+          </div>
+          <div class="cam-popup-grid" id="stickerPopupGrid"></div>
         </div>
       </div>
     </section>
@@ -181,18 +336,10 @@ document.querySelector('#app').innerHTML = `
               <input type="file" id="stickerUploader" accept="image/*" class="hidden-input">
             </label>
 
-            <div class="mode-selector-box">
-              <div class="ai-engine-badge">
-                🤖 AI ตัดวัตถุ/น้องแมว/คน (ONNX Neural Engine)
-              </div>
-            </div>
-
-            <div class="checkbox-group">
-              <label class="checkbox-label">
-                <input type="checkbox" id="chkRemoveBg" checked>
-                <span>เปิดใช้งานระบบตัดพื้นหลังอัตโนมัติ</span>
-              </label>
-            </div>
+            <label class="checkbox-label">
+              <input type="checkbox" id="chkRemoveBg" checked>
+              <span>ตัดพื้นหลังอัตโนมัติ (MediaPipe AI + Smart Color Key)</span>
+            </label>
 
             <div class="progress-container hidden" id="progressContainer">
               <div class="progress-bar-bg">
@@ -306,7 +453,6 @@ const canvasElement = document.querySelector('#photoCanvas');
 const countdownOverlay = document.querySelector('#countdownOverlay');
 const countdownNumber = document.querySelector('#countdownNumber');
 
-const btnStartCamera = document.querySelector('#btnStart');
 const btnStopCamera = document.querySelector('#btnStopCamera');
 const btnSwitch = document.querySelector('#btnSwitch');
 const btnCapture = document.querySelector('#btnCapture');
@@ -314,6 +460,41 @@ const btnRetake = document.querySelector('#btnRetake');
 const btnExport = document.querySelector('#btnExport');
 const btnSaveToGallery = document.querySelector('#btnSaveToGallery');
 const btnSaveTemplate = document.querySelector('#btnSaveTemplate');
+
+// Camera Studio DOM Elements
+const previewBox = document.querySelector('#previewBox');
+const camPreviewCanvas = document.querySelector('#camPreviewCanvas');
+const btnAspectActive = document.querySelector('#btnAspectActive');
+const aspectCollapsible = document.querySelector('#aspectCollapsible');
+const btnAspectArrow = document.querySelector('#btnAspectArrow');
+
+const filterCarouselTrack = document.querySelector('#filterCarouselTrack');
+const btnFilterUp = document.querySelector('#btnFilterUp');
+const btnFilterDown = document.querySelector('#btnFilterDown');
+
+const btnTimerActive = document.querySelector('#btnTimerActive');
+const btnTimerArrow = document.querySelector('#btnTimerArrow');
+
+const brightnessSlider = document.querySelector('#brightnessSlider');
+const zoomSlider = document.querySelector('#zoomSlider');
+
+const camGridOverlay = document.querySelector('#camGridOverlay');
+const btnToolGrid = document.querySelector('#btnToolGrid');
+
+const btnToolBurst = document.querySelector('#btnToolBurst');
+const burstBadge = document.querySelector('#burstBadge');
+
+const btnToolFrame = document.querySelector('#btnToolFrame');
+const framePopupModal = document.querySelector('#framePopupModal');
+const framePopupGrid = document.querySelector('#framePopupGrid');
+const btnGoToEditorFromFrame = document.querySelector('#btnGoToEditorFromFrame');
+const btnCloseFramePopup = document.querySelector('#btnCloseFramePopup');
+
+const btnToolSticker = document.querySelector('#btnToolSticker');
+const stickerPopupModal = document.querySelector('#stickerPopupModal');
+const stickerPopupGrid = document.querySelector('#stickerPopupGrid');
+const btnGoToEditorFromSticker = document.querySelector('#btnGoToEditorFromSticker');
+const btnCloseStickerPopup = document.querySelector('#btnCloseStickerPopup');
 
 const tabFrames = document.querySelector('#tabFrames');
 const tabStickers = document.querySelector('#tabStickers');
@@ -325,9 +506,7 @@ const galleryStickers = document.querySelector('#galleryStickers');
 const galleryUpload = document.querySelector('#galleryUpload');
 
 const stickerUploader = document.querySelector('#stickerUploader');
-const selectSegmenterEngine = document.querySelector('#selectSegmenterEngine');
 const chkRemoveBg = document.querySelector('#chkRemoveBg');
-const chkInvertBg = document.querySelector('#chkInvertBg');
 const progressContainer = document.querySelector('#progressContainer');
 const progressBarFill = document.querySelector('#progressBarFill');
 const progressText = document.querySelector('#progressText');
@@ -366,6 +545,7 @@ const templateGrid = document.querySelector('#templateGrid');
 
 let authMode = 'login';
 let templateCategory = 'my';
+
 
 // Init Canvas Engine
 initCanvasEngine(canvasElement);
@@ -558,14 +738,341 @@ function hideProgress() {
   progressContainer.classList.add('hidden');
 }
 
+function applyLiveStreamFilters() {
+  const currentFilter = FILTERS_CATALOG[activeFilterIndex].css;
+  const brightnessStr = `brightness(${activeBrightness})`;
+  const filterCombined = currentFilter === 'none' ? brightnessStr : `${currentFilter} ${brightnessStr}`;
+
+  videoElement.style.filter = filterCombined;
+
+  // Zoom & Mirror transforms
+  const isMirrored = videoElement.classList.contains('mirror');
+  const mirrorScale = isMirrored ? 'scaleX(-1)' : 'scaleX(1)';
+  const zoomScale = `scale(${activeZoom})`;
+  videoElement.style.transform = `${mirrorScale} ${zoomScale}`;
+}
+
+// 1. Aspect Ratio Cycling (4:3 -> 1:1 -> 16:9)
+const ASPECT_STEPS = ['4:3', '1:1', '16:9'];
+
+function cycleAspectRatio() {
+  const currentIdx = ASPECT_STEPS.indexOf(currentAspectRatio);
+  const nextIdx = (currentIdx + 1) % ASPECT_STEPS.length;
+  currentAspectRatio = ASPECT_STEPS[nextIdx];
+  btnAspectActive.textContent = currentAspectRatio;
+  previewBox.style.aspectRatio = currentAspectRatio.replace(':', ' / ');
+}
+
+btnAspectActive?.addEventListener('click', cycleAspectRatio);
+btnAspectArrow?.addEventListener('click', cycleAspectRatio);
+
+// 2. Filter Carousel & Realtime Preview (with Mouse Wheel Scroll Support)
+function renderFilterCarousel() {
+  if (!filterCarouselTrack) return;
+  filterCarouselTrack.innerHTML = FILTERS_CATALOG.map((f, i) => `
+    <div class="filter-swatch-item ${i === activeFilterIndex ? 'active' : ''}" data-index="${i}">
+      <div class="filter-swatch-box ${f.class}"></div>
+      <span class="filter-swatch-name">${f.name}</span>
+    </div>
+  `).join('');
+
+  filterCarouselTrack.querySelectorAll('.filter-swatch-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      const idx = parseInt(e.currentTarget.dataset.index, 10);
+      selectFilter(idx);
+    });
+  });
+
+  updateFilterTrackPosition();
+}
+
+function selectFilter(index) {
+  activeFilterIndex = index;
+  renderFilterCarousel();
+  applyLiveStreamFilters();
+}
+
+function updateFilterTrackPosition() {
+  if (!filterCarouselTrack) return;
+  const offset = -(activeFilterIndex * 66);
+  filterCarouselTrack.style.transform = `translateY(${offset}px)`;
+}
+
+btnFilterUp?.addEventListener('click', () => {
+  activeFilterIndex = (activeFilterIndex - 1 + FILTERS_CATALOG.length) % FILTERS_CATALOG.length;
+  selectFilter(activeFilterIndex);
+});
+
+btnFilterDown?.addEventListener('click', () => {
+  activeFilterIndex = (activeFilterIndex + 1) % FILTERS_CATALOG.length;
+  selectFilter(activeFilterIndex);
+});
+
+// Enable Mouse Wheel Scroll on Filter Viewport
+const filterCarouselViewport = document.querySelector('.filter-carousel-viewport');
+filterCarouselViewport?.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (e.deltaY > 0) {
+    activeFilterIndex = (activeFilterIndex + 1) % FILTERS_CATALOG.length;
+  } else if (e.deltaY < 0) {
+    activeFilterIndex = (activeFilterIndex - 1 + FILTERS_CATALOG.length) % FILTERS_CATALOG.length;
+  }
+  selectFilter(activeFilterIndex);
+}, { passive: false });
+
+// Initial Carousel Render
+renderFilterCarousel();
+
+// 3. Countdown Timer Cycle (0, 3, 5, 10)
+const TIMER_STEPS = [0, 3, 5, 10];
+
+function cycleTimer() {
+  const currentIdx = TIMER_STEPS.indexOf(activeTimerSeconds);
+  const nextIdx = (currentIdx + 1) % TIMER_STEPS.length;
+  activeTimerSeconds = TIMER_STEPS[nextIdx];
+  btnTimerActive.textContent = `${activeTimerSeconds}s`;
+}
+
+btnTimerActive?.addEventListener('click', cycleTimer);
+btnTimerArrow?.addEventListener('click', cycleTimer);
+
+// 4. Brightness & Zoom Sliders
+brightnessSlider?.addEventListener('input', (e) => {
+  activeBrightness = parseFloat(e.target.value);
+  applyLiveStreamFilters();
+});
+
+zoomSlider?.addEventListener('input', async (e) => {
+  activeZoom = parseFloat(e.target.value);
+  applyLiveStreamFilters();
+  await setZoom(activeZoom);
+});
+
+// 5. Grid Overlay Toggle
+btnToolGrid?.addEventListener('click', () => {
+  isGridActive = !isGridActive;
+  btnToolGrid.classList.toggle('active', isGridActive);
+  camGridOverlay.classList.toggle('active', isGridActive);
+});
+
+// 6. Burst Mode Cycle (1, 2, 4, 6)
+const BURST_STEPS = [1, 2, 4, 6];
+
+btnToolBurst?.addEventListener('click', () => {
+  const currentIdx = BURST_STEPS.indexOf(activeBurstCount);
+  const nextIdx = (currentIdx + 1) % BURST_STEPS.length;
+  activeBurstCount = BURST_STEPS[nextIdx];
+  burstBadge.textContent = `${activeBurstCount}x`;
+  btnToolBurst.classList.toggle('active', activeBurstCount > 1);
+});
+
+// 7. Floating Popups (Frame & Sticker)
+btnToolFrame?.addEventListener('click', () => {
+  stickerPopupModal.classList.add('hidden');
+  btnToolSticker.classList.remove('active');
+
+  framePopupModal.classList.toggle('hidden');
+  btnToolFrame.classList.toggle('active', !framePopupModal.classList.contains('hidden'));
+  if (!framePopupModal.classList.contains('hidden')) {
+    renderFramePopupGrid();
+  }
+});
+
+btnCloseFramePopup?.addEventListener('click', () => {
+  framePopupModal.classList.add('hidden');
+  btnToolFrame.classList.remove('active');
+});
+
+btnGoToEditorFromFrame?.addEventListener('click', () => {
+  framePopupModal.classList.add('hidden');
+  btnToolFrame.classList.remove('active');
+  switchTab('editor');
+});
+
+function renderFramePopupGrid() {
+  if (!framePopupGrid) return;
+  framePopupGrid.innerHTML = FRAMES_CATALOG.map(f => `
+    <div class="popup-grid-item" data-src="${f.src}" data-id="${f.id}">
+      <img src="${f.src}" alt="${f.name}" />
+      <span>${f.name}</span>
+    </div>
+  `).join('');
+
+  framePopupGrid.querySelectorAll('.popup-grid-item').forEach(item => {
+    item.addEventListener('click', async (e) => {
+      const src = e.currentTarget.dataset.src;
+      const id = e.currentTarget.dataset.id;
+      const name = e.currentTarget.querySelector('span').textContent;
+      await addPreviewLayer({ type: 'frame', image: src, id: `frame-${id}`, name });
+      framePopupModal.classList.add('hidden');
+      btnToolFrame.classList.remove('active');
+    });
+  });
+}
+
+btnToolSticker?.addEventListener('click', () => {
+  framePopupModal.classList.add('hidden');
+  btnToolFrame.classList.remove('active');
+
+  stickerPopupModal.classList.toggle('hidden');
+  btnToolSticker.classList.toggle('active', !stickerPopupModal.classList.contains('hidden'));
+  if (!stickerPopupModal.classList.contains('hidden')) {
+    renderStickerPopupGrid();
+  }
+});
+
+btnCloseStickerPopup?.addEventListener('click', () => {
+  stickerPopupModal.classList.add('hidden');
+  btnToolSticker.classList.remove('active');
+});
+
+btnGoToEditorFromSticker?.addEventListener('click', () => {
+  stickerPopupModal.classList.add('hidden');
+  btnToolSticker.classList.remove('active');
+  switchTab('editor');
+});
+
+function renderStickerPopupGrid() {
+  if (!stickerPopupGrid) return;
+  stickerPopupGrid.innerHTML = STICKERS_CATALOG.map(s => `
+    <div class="popup-grid-item" data-src="${s.src}" data-id="${s.id}">
+      <img src="${s.src}" alt="${s.name}" />
+      <span>${s.name}</span>
+    </div>
+  `).join('');
+
+  stickerPopupGrid.querySelectorAll('.popup-grid-item').forEach(item => {
+    item.addEventListener('click', async (e) => {
+      const src = e.currentTarget.dataset.src;
+      const id = e.currentTarget.dataset.id;
+      const name = e.currentTarget.querySelector('span').textContent;
+      const cw = camPreviewCanvas.width || 640;
+      const ch = camPreviewCanvas.height || 480;
+      await addPreviewLayer({
+        type: 'sticker',
+        image: src,
+        id: `sticker-${id}-${Date.now().toString().substring(8)}`,
+        name,
+        x: cw / 2 + (Math.random() - 0.5) * 100,
+        y: ch / 2 + (Math.random() - 0.5) * 80
+      });
+      stickerPopupModal.classList.add('hidden');
+      btnToolSticker.classList.remove('active');
+    });
+  });
+}
+
+// --- Camera Preview Layer Management ---
+async function addPreviewLayer(layerData) {
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = reject;
+    img.src = typeof layerData.image === 'string' ? layerData.image : layerData.image.src;
+  });
+
+  const cw = camPreviewCanvas.width || 640;
+  const ch = camPreviewCanvas.height || 480;
+  const defaultW = layerData.type === 'frame' ? cw : Math.min(img.width, 150);
+  const defaultH = layerData.type === 'frame' ? ch : Math.min(img.height, 150);
+
+  const layer = {
+    id: layerData.id,
+    type: layerData.type,
+    name: layerData.name || layerData.id,
+    src: typeof layerData.image === 'string' ? layerData.image : img.src,
+    image: img,
+    x: layerData.x ?? cw / 2,
+    y: layerData.y ?? ch / 2,
+    width: defaultW,
+    height: defaultH,
+    rotation: 0,
+    scale: 1,
+    opacity: 1
+  };
+
+  if (layer.type === 'frame') {
+    const idx = camPreviewLayers.findIndex(l => l.type === 'frame');
+    if (idx >= 0) camPreviewLayers[idx] = layer;
+    else camPreviewLayers.push(layer);
+  } else {
+    camPreviewLayers.push(layer);
+  }
+}
+
+function removePreviewLayer(id) {
+  camPreviewLayers = camPreviewLayers.filter(l => l.id !== id);
+}
+
+function clearPreviewLayers() {
+  camPreviewLayers = [];
+}
+
+// Preview rendering loop
+function startCamPreviewLoop() {
+  if (camPreviewRAF) return;
+  function loop() {
+    renderCamPreview();
+    camPreviewRAF = requestAnimationFrame(loop);
+  }
+  camPreviewRAF = requestAnimationFrame(loop);
+}
+
+function stopCamPreviewLoop() {
+  if (camPreviewRAF) {
+    cancelAnimationFrame(camPreviewRAF);
+    camPreviewRAF = null;
+  }
+}
+
+function renderCamPreview() {
+  if (!camPreviewCanvas) return;
+  const pctx = camPreviewCanvas.getContext('2d');
+  pctx.clearRect(0, 0, camPreviewCanvas.width, camPreviewCanvas.height);
+
+  if (camPreviewLayers.length === 0) return;
+
+  const stickers = camPreviewLayers.filter(l => l.type === 'sticker');
+  const frames = camPreviewLayers.filter(l => l.type === 'frame');
+  const ordered = [...stickers, ...frames];
+
+  ordered.forEach(layer => {
+    if (!layer.image) return;
+    pctx.save();
+    pctx.globalAlpha = layer.opacity ?? 1;
+    pctx.translate(layer.x, layer.y);
+    if (layer.rotation) pctx.rotate((layer.rotation * Math.PI) / 180);
+    const s = layer.scale || 1;
+    pctx.scale(s, s);
+    const w = layer.width;
+    const h = layer.height;
+    pctx.drawImage(layer.image, -w / 2, -h / 2, w, h);
+    pctx.restore();
+  });
+}
+
+// Sync preview canvas size with video
+if (previewBox && camPreviewCanvas) {
+  const resizeObs = new ResizeObserver(() => {
+    const rect = previewBox.getBoundingClientRect();
+    camPreviewCanvas.width = rect.width;
+    camPreviewCanvas.height = rect.height;
+  });
+  resizeObs.observe(previewBox);
+}
+
+startCamPreviewLoop();
+
 /**
- * Camera Actions
+ * Camera Actions (Updated with Realtime Filters, Timer, & Burst Mode)
  */
 async function handleStartCamera() {
   hideError();
   try {
     await initCamera(videoElement);
     updateMirrorState();
+    applyLiveStreamFilters();
     updateStatus(true, `พร้อมใช้งาน (${getFacingMode() === 'user' ? 'กล้องหน้า' : 'กล้องหลัง'})`);
   } catch (error) {
     showError(error.message);
@@ -581,43 +1088,215 @@ function handleStopCamera() {
 
 async function handleSwitchCamera() {
   hideError();
-  btnSwitch.disabled = true;
+  if (btnSwitch) btnSwitch.disabled = true;
   try {
     await switchCamera(videoElement);
     updateMirrorState();
+    applyLiveStreamFilters();
     updateStatus(true, `พร้อมใช้งาน (${getFacingMode() === 'user' ? 'กล้องหน้า' : 'กล้องหลัง'})`);
   } catch (error) {
     showError(error.message);
   } finally {
-    btnSwitch.disabled = false;
+    if (btnSwitch) btnSwitch.disabled = false;
   }
 }
 
-function handleCapture() {
+/**
+ * Captures a single frame from video with filters and returns an offscreen canvas.
+ */
+function captureSingleFrame(filterOptions) {
+  const vw = videoElement.videoWidth || 1280;
+  const vh = videoElement.videoHeight || 720;
+  const offscreen = document.createElement('canvas');
+  offscreen.width = vw;
+  offscreen.height = vh;
+  const offCtx = offscreen.getContext('2d');
+
+  const isMirrored = videoElement.classList.contains('mirror');
+  if (isMirrored) {
+    offCtx.translate(vw, 0);
+    offCtx.scale(-1, 1);
+  }
+  if (filterOptions.filter && filterOptions.filter !== 'none') {
+    offCtx.filter = filterOptions.filter;
+  }
+  offCtx.drawImage(videoElement, 0, 0, vw, vh);
+  return offscreen;
+}
+
+/**
+ * Composes multiple captured canvases into a single Photobooth Grid Card image.
+ * 2 → 2×1 vertical strip, 4 → 2×2 grid, 6 → 3×2 grid
+ */
+function composeBurstGrid(frames) {
+  const count = frames.length;
+  let cols, rows;
+  if (count <= 2) {
+    cols = 1;
+    rows = 2; // 2 photos stacked vertically (classic photobooth strip)
+  } else if (count <= 4) {
+    cols = 2;
+    rows = 2; // 4 photos in 2x2 grid
+  } else {
+    cols = 2;
+    rows = 3; // 6 photos in 3x2 grid
+  }
+
+  const fw = frames[0].width;
+  const fh = frames[0].height;
+  const gap = 16;
+  const padding = 24;
+
+  const totalW = cols * fw + (cols - 1) * gap + padding * 2;
+  const totalH = rows * fh + (rows - 1) * gap + padding * 2;
+
+  const composite = document.createElement('canvas');
+  composite.width = totalW;
+  composite.height = totalH;
+  const cctx = composite.getContext('2d');
+
+  // Photobooth Card background frame
+  cctx.fillStyle = '#18181b';
+  cctx.fillRect(0, 0, totalW, totalH);
+
+  // Decorative border
+  cctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  cctx.lineWidth = 2;
+  cctx.strokeRect(8, 8, totalW - 16, totalH - 16);
+
+  frames.forEach((frame, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = padding + col * (fw + gap);
+    const y = padding + row * (fh + gap);
+    cctx.drawImage(frame, x, y, fw, fh);
+  });
+
+  return composite;
+}
+
+/**
+ * After capture, transfer preview layers to canvasEngine and switch to editor.
+ */
+async function transferPreviewLayersToEditor() {
+  setTargetCanvas(canvasElement);
+
+  for (const pl of camPreviewLayers) {
+    await addLayer({
+      type: pl.type,
+      image: pl.src,
+      id: pl.id,
+      x: undefined,
+      y: undefined,
+      scale: pl.scale,
+      rotation: pl.rotation
+    });
+  }
+  clearPreviewLayers();
+  refreshLayerListUI();
+}
+
+async function handleCapture() {
   hideError();
   btnCapture.disabled = true;
-  countdownOverlay.classList.add('active');
+  framePopupModal.classList.add('hidden');
+  stickerPopupModal.classList.add('hidden');
+  btnToolFrame.classList.remove('active');
+  btnToolSticker.classList.remove('active');
 
-  startCountdown(
-    3,
-    (remaining) => {
-      if (remaining > 0) {
-        countdownNumber.textContent = remaining;
+  const filterCss = FILTERS_CATALOG[activeFilterIndex].css;
+  const filterOptions = {
+    filter: filterCss === 'none' ? `brightness(${activeBrightness})` : `${filterCss} brightness(${activeBrightness})`
+  };
+
+  try {
+    if (activeBurstCount <= 1) {
+      // --- Single shot ---
+      if (activeTimerSeconds > 0) {
+        countdownOverlay.classList.add('active');
       }
-    },
-    async () => {
-      countdownNumber.textContent = '📸';
-      await captureFrame(videoElement);
+
+      startCountdown(
+        activeTimerSeconds,
+        (remaining) => {
+          if (remaining > 0) countdownNumber.textContent = remaining;
+          else countdownNumber.textContent = '📸';
+        },
+        async () => {
+          await captureFrame(videoElement, filterOptions);
+          await transferPreviewLayersToEditor();
+
+          setTimeout(() => {
+            countdownOverlay.classList.remove('active');
+            btnCapture.disabled = false;
+            switchTab('editor');
+            updateStatus(true, 'ถ่ายภาพแล้ว - ตกแต่งและใส่กรอบได้เลย!');
+          }, 400);
+        }
+      );
+    } else {
+      // --- Burst Mode: countdown per shot + compose into grid ---
+      const capturedFrames = [];
+
+      for (let i = 1; i <= activeBurstCount; i++) {
+        countdownOverlay.classList.add('active');
+
+        await new Promise((resolve) => {
+          if (activeTimerSeconds > 0) {
+            startCountdown(
+              activeTimerSeconds,
+              (remaining) => {
+                if (remaining > 0) {
+                  countdownNumber.textContent = `${remaining}s (📸 ${i}/${activeBurstCount})`;
+                } else {
+                  countdownNumber.textContent = `📸 #${i}`;
+                }
+              },
+              () => {
+                const frame = captureSingleFrame(filterOptions);
+                capturedFrames.push(frame);
+                resolve();
+              }
+            );
+          } else {
+            countdownNumber.textContent = `📸 ${i}/${activeBurstCount}`;
+            const frame = captureSingleFrame(filterOptions);
+            capturedFrames.push(frame);
+            resolve();
+          }
+        });
+
+        // Flash delay between burst shots
+        if (i < activeBurstCount) {
+          await new Promise((res) => setTimeout(res, activeTimerSeconds > 0 ? 500 : 300));
+        }
+      }
+
+      // Compose all burst photos into a single Photobooth Grid Card
+      const compositeCanvas = composeBurstGrid(capturedFrames);
+
+      // Set target canvas & inject composite grid as base layer in editor
+      setTargetCanvas(canvasElement);
+      setBaseLayerImage(compositeCanvas);
+
+      // Transfer any active stickers/frames
+      await transferPreviewLayersToEditor();
 
       setTimeout(() => {
         countdownOverlay.classList.remove('active');
         btnCapture.disabled = false;
         switchTab('editor');
-        updateStatus(true, 'ถ่ายภาพแล้ว - ตกแต่งและใส่กรอบได้เลย!');
+        updateStatus(true, `ถ่ายภาพเรียง ${activeBurstCount} ภาพเป็น Grid รวมเรียบร้อยแล้ว!`);
       }, 400);
     }
-  );
+  } catch (err) {
+    console.error('Capture error:', err);
+    showError(`เกิดข้อผิดพลาดในการถ่ายภาพ: ${err.message}`);
+    countdownOverlay.classList.remove('active');
+    btnCapture.disabled = false;
+  }
 }
+
 
 /**
  * Frame Catalog Handler
@@ -645,7 +1324,7 @@ document.querySelector('#btnRemoveFrame').addEventListener('click', () => {
 });
 
 /**
- * Custom Sticker Upload with Multi-Engine AI (ONNX + Smart Color Key)
+ * Custom Sticker Upload with AI + Smart Color-Key Background Removal
  */
 async function handleStickerUpload(e) {
   const file = e.target.files?.[0];
@@ -656,8 +1335,7 @@ async function handleStickerUpload(e) {
 
   if (chkRemoveBg.checked) {
     try {
-      updateProgress(10, 'กำลังเตรียมการตัดพื้นหลังด้วย AI...');
-
+      updateProgress(10, 'กำลังประมวลผลระบบตัดพื้นหลัง...');
       finalBlob = await removeBackground(file, {
         onProgress: ({ progress, message }) => updateProgress(progress, message),
         onError: (err) => showError(`ไม่สามารถตัดพื้นหลังได้: ${err.message}`)
@@ -710,6 +1388,7 @@ btnSaveCustomSticker.addEventListener('click', async () => {
     }
   }
 
+  // Add to local catalog
   const newSticker = {
     id: `custom-${Date.now()}`,
     name: stickerName,
@@ -1005,15 +1684,65 @@ function renderSessionGallery() {
       </div>
       <div class="photo-footer">
         <span class="photo-time">⏰ ${p.timestamp}</span>
+        <button class="btn btn-primary btn-sm btn-edit-photo" data-id="${p.id}">🎨 แก้ไข</button>
         <a class="btn btn-secondary btn-sm" href="${p.dataUrl}" download="snapframe-${p.id}.png">📥 ดาวน์โหลด</a>
       </div>
     `;
     sessionGalleryGrid.appendChild(card);
   });
+
+  // Attach edit button handlers
+  document.querySelectorAll('.btn-edit-photo').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const photoId = e.target.dataset.id;
+      const photo = photos.find(p => p.id === photoId);
+      if (photo) loadPhotoToEditor(photo.dataUrl);
+    });
+  });
+}
+
+/**
+ * Loads a photo dataUrl into canvasEngine as base layer and switches to editor.
+ */
+async function loadPhotoToEditor(dataUrl) {
+  try {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+
+    setTargetCanvas(canvasElement);
+    canvasElement.width = img.width;
+    canvasElement.height = img.height;
+
+    // Create offscreen canvas for base layer
+    const offscreen = document.createElement('canvas');
+    offscreen.width = img.width;
+    offscreen.height = img.height;
+    offscreen.getContext('2d').drawImage(img, 0, 0);
+
+    // Inject as base layer
+    await captureFrame(videoElement, {});
+    updateLayer('base-layer', {
+      image: offscreen,
+      width: img.width,
+      height: img.height,
+      x: img.width / 2,
+      y: img.height / 2
+    });
+
+    refreshLayerListUI();
+    switchTab('editor');
+    updateStatus(true, '📸 โหลดภาพจากคลังเรียบร้อย - แก้ไขเพิ่มเติมได้!');
+  } catch (err) {
+    showError(`ไม่สามารถโหลดภาพได้: ${err.message}`);
+  }
 }
 
 // Global Event Listeners
-btnStartCamera?.addEventListener('click', handleStartCamera);
 btnStopCamera?.addEventListener('click', handleStopCamera);
 btnSwitch?.addEventListener('click', handleSwitchCamera);
 btnCapture?.addEventListener('click', handleCapture);

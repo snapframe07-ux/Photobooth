@@ -121,7 +121,14 @@ export function startCountdown(seconds = 3, onTick = () => {}, onComplete = () =
     countdownInterval = null;
   }
 
-  let remaining = Math.max(1, parseInt(seconds, 10) || 3);
+  const secNum = parseInt(seconds, 10);
+  if (secNum <= 0) {
+    if (typeof onTick === 'function') onTick(0);
+    if (typeof onComplete === 'function') onComplete();
+    return;
+  }
+
+  let remaining = secNum;
 
   // Initial tick for starting second
   if (typeof onTick === 'function') {
@@ -148,6 +155,30 @@ export function startCountdown(seconds = 3, onTick = () => {}, onComplete = () =
 }
 
 /**
+ * Applies hardware zoom to active camera track if supported.
+ * @param {number} zoomValue
+ */
+export async function setZoom(zoomValue) {
+  if (!currentStream) return false;
+  const track = currentStream.getVideoTracks()[0];
+  if (!track || !track.getCapabilities) return false;
+
+  try {
+    const capabilities = track.getCapabilities();
+    if (capabilities.zoom) {
+      const min = capabilities.zoom.min || 1;
+      const max = capabilities.zoom.max || 5;
+      const clampedZoom = Math.max(min, Math.min(max, zoomValue));
+      await track.applyConstraints({ advanced: [{ zoom: clampedZoom }] });
+      return true;
+    }
+  } catch (err) {
+    console.warn('Hardware zoom not supported or failed:', err);
+  }
+  return false;
+}
+
+/**
  * Returns the active MediaStream instance if available.
  * @returns {MediaStream|null}
  */
@@ -162,3 +193,4 @@ export function getCurrentStream() {
 export function getFacingMode() {
   return currentFacingMode;
 }
+

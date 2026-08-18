@@ -207,6 +207,7 @@ body {
 }
 
 /* Buttons */
+/* Action bar & legacy controls */
 .action-bar {
   display: flex;
   align-items: center;
@@ -214,6 +215,625 @@ body {
   gap: 1.25rem;
   margin-top: 0.5rem;
 }
+
+/* ==========================================================================
+   Figma Photobooth Studio Camera View Styles
+   ========================================================================== */
+.cam-studio-card {
+  position: relative;
+  background: #111113;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
+  user-select: none;
+}
+
+.cam-header-title {
+  padding: 0.6rem 1rem 0.2rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #94a3b8;
+}
+
+.cam-studio-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: #09090b;
+}
+
+/* Film Perforation Edges (Left & Right) */
+.film-side-holes {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  pointer-events: none;
+}
+
+.film-side-holes.left { left: 4px; }
+.film-side-holes.right { right: 4px; }
+
+.film-hole {
+  width: 8px;
+  height: 12px;
+  background: #000000;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Main Workspace (Left - Center - Right) */
+.cam-workspace {
+  display: grid;
+  grid-template-columns: 80px 1fr 80px;
+  gap: 0.8rem;
+  padding: 0.5rem 1.5rem;
+  align-items: center;
+  min-height: 440px;
+}
+
+/* --- Left Panel (Aspect Ratio & Filters) --- */
+.cam-left-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2rem;
+  z-index: 4;
+}
+
+.aspect-ratio-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.btn-aspect-opt {
+  width: 58px;
+  height: 34px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  color: #cbd5e1;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-aspect-opt:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.btn-aspect-opt.active {
+  border-color: #eab308;
+  color: #eab308;
+  box-shadow: 0 0 10px rgba(234, 179, 8, 0.2);
+}
+
+.btn-arrow-toggle {
+  background: none;
+  border: none;
+  color: #64748b;
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 2px;
+  transition: color 0.2s;
+}
+
+.btn-arrow-toggle:hover {
+  color: #f8fafc;
+}
+
+/* Filter Swatches Carousel */
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.filter-carousel-viewport {
+  height: 250px;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.filter-carousel-track {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.filter-swatch-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  gap: 4px;
+  transition: transform 0.2s;
+}
+
+.filter-swatch-item:hover {
+  transform: scale(1.05);
+}
+
+.filter-swatch-box {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  border: 2px solid transparent;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4);
+}
+
+.filter-swatch-item.active .filter-swatch-box {
+  border-color: #eab308;
+  box-shadow: 0 0 12px rgba(234, 179, 8, 0.4);
+}
+
+.filter-swatch-name {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.filter-swatch-item.active .filter-swatch-name {
+  color: #eab308;
+  font-weight: 700;
+}
+
+/* Swatch Background Colors & Previews */
+.swatch-classic { background: linear-gradient(135deg, #a1a1aa, #52525b); }
+.swatch-sunlit  { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.swatch-frost   { background: linear-gradient(135deg, #38bdf8, #0284c7); }
+.swatch-noir    { background: linear-gradient(135deg, #e4e4e7, #18181b); }
+.swatch-vivid   { background: linear-gradient(135deg, #ec4899, #8b5cf6); }
+.swatch-warm    { background: linear-gradient(135deg, #fb923c, #b45309); }
+.swatch-vintage { background: linear-gradient(135deg, #d97706, #78350f); }
+
+/* --- Center Area (Video & Controls) --- */
+.cam-center-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 100%;
+}
+
+.cam-preview-box {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 4 / 3;
+  background: #18181b;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: aspect-ratio 0.3s ease;
+}
+
+.cam-preview-box video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: filter 0.2s ease, transform 0.1s ease;
+}
+
+.cam-preview-box video.mirror {
+  transform: scaleX(-1);
+}
+
+#camPreviewCanvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: auto;
+  z-index: 5;
+}
+
+/* 3x3 Grid Overlay */
+.cam-grid-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+  z-index: 6;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.cam-grid-overlay.active {
+  opacity: 1;
+}
+
+.cam-grid-cell {
+  border-right: 1px dashed rgba(255, 255, 255, 0.35);
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.35);
+}
+
+.cam-grid-cell:nth-child(3n) { border-right: none; }
+.cam-grid-cell:nth-child(n+7) { border-bottom: none; }
+
+/* Zoom Ruler Bar */
+.zoom-ruler-bar {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(18, 18, 20, 0.75);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 20px;
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 8;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+}
+
+.zoom-icon {
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.zoom-ruler-track {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 160px;
+}
+
+.zoom-ruler-input {
+  width: 100%;
+  accent-color: #f59e0b;
+  cursor: pointer;
+  height: 4px;
+}
+
+/* --- Right Panel (Timer & Brightness) --- */
+.cam-right-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  z-index: 4;
+}
+
+.timer-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.btn-timer-opt {
+  width: 58px;
+  height: 34px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  color: #cbd5e1;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-timer-opt:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.btn-timer-opt.active {
+  border-color: #eab308;
+  color: #eab308;
+  box-shadow: 0 0 10px rgba(234, 179, 8, 0.2);
+}
+
+/* Vertical Brightness Control */
+.brightness-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  height: 180px;
+}
+
+.brightness-icon {
+  font-size: 0.9rem;
+  color: #94a3b8;
+}
+
+.brightness-slider-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 130px;
+}
+
+.brightness-input {
+  writing-mode: bt-lr;
+  -webkit-appearance: slider-vertical;
+  width: 8px;
+  height: 120px;
+  accent-color: #f59e0b;
+  cursor: pointer;
+}
+
+/* --- Bottom Toolbar & Film Strip --- */
+.cam-bottom-filmstrip {
+  background: #09090b;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 0.6rem 1rem 0.8rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  position: relative;
+}
+
+.film-holes-horizontal {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 0.5rem;
+}
+
+.film-hole-h {
+  width: 12px;
+  height: 7px;
+  background: #000000;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.cam-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.btn-tool-icon {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #f8fafc;
+  font-size: 1.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-tool-icon:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: translateY(-2px);
+}
+
+.btn-tool-icon.active {
+  border-color: #eab308;
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+}
+
+.badge-plus {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #eab308;
+  color: #000000;
+  font-size: 0.65rem;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.badge-count {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  background: #ec4899;
+  color: #ffffff;
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+
+/* Large Shutter / REC Button */
+.btn-shutter-rec {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: transparent;
+  border: 3px solid #ffffff;
+  padding: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
+}
+
+.btn-shutter-rec:hover {
+  transform: scale(1.06);
+  border-color: #f8fafc;
+}
+
+.btn-shutter-rec:active {
+  transform: scale(0.95);
+}
+
+.shutter-inner-dot {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: #ef4444;
+  transition: background 0.2s;
+}
+
+/* Floating Modals / Popups (Frames & Stickers) */
+.cam-popup-modal {
+  position: absolute;
+  bottom: 85px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90%;
+  max-width: 520px;
+  background: rgba(18, 18, 22, 0.88);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 20px;
+  padding: 1rem;
+  z-index: 100;
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  animation: popupSlideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes popupSlideUp {
+  from { opacity: 0; transform: translate(-50%, 15px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.cam-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 0.6rem;
+}
+
+.cam-popup-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.btn-popup-action {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.35rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-popup-action:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+.cam-popup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 0.8rem;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 0.4rem 0.2rem;
+}
+
+.cam-popup-grid::-webkit-scrollbar { width: 5px; }
+.cam-popup-grid::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 3px; }
+
+.popup-grid-item {
+  aspect-ratio: 1;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.popup-grid-item:hover {
+  border-color: #eab308;
+  background: rgba(234, 179, 8, 0.1);
+  transform: translateY(-2px);
+}
+
+.popup-grid-item img {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+}
+
+.popup-grid-item span {
+  font-size: 0.65rem;
+  color: #94a3b8;
+  margin-top: 4px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .cam-workspace {
+    grid-template-columns: 60px 1fr 60px;
+    padding: 0.4rem 0.6rem;
+    gap: 0.4rem;
+  }
+
+  .btn-aspect-opt, .btn-timer-opt {
+    width: 48px;
+    font-size: 0.75rem;
+  }
+
+  .zoom-ruler-bar {
+    width: 90%;
+    padding: 4px 8px;
+  }
+
+  .zoom-ruler-track {
+    width: 100px;
+  }
+}
+
 
 .btn {
   font-family: inherit;
@@ -424,25 +1044,6 @@ body {
 
 .hidden-input {
   display: none;
-}
-
-.mode-selector-box {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
-.ai-engine-badge {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 8px;
-  padding: 0.55rem 0.85rem;
-  color: #fff;
-  font-size: 0.85rem;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
 }
 
 .checkbox-label {
