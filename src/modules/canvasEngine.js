@@ -19,8 +19,52 @@ let layerInitialState = null;
 let onSelectionChangeCallback = null;
 
 // Handle sizes
-const HANDLE_SIZE = 12; // Circle radius for handles
-const ROTATE_HANDLE_OFFSET = 30; // Offset above top border
+const HANDLE_SIZE = 12; // รัศมีขั้นต่ำของจุดจับ (หน่วยพิกเซลของ canvas)
+const ROTATE_HANDLE_OFFSET = 30; // ระยะขั้นต่ำของจุดหมุนเหนือขอบบน
+
+// จุดจับต้องมีขนาดคงที่ "บนจอจริง" ไม่ใช่บนพิกัด canvas — canvas กว้าง 1280
+// แต่แสดงจริงราว 700-900px จุดจับเดิมจึงเหลือรัศมีแค่ ~7px กดไม่ติด
+const HANDLE_RADIUS_CSS = 15;
+const ROTATE_OFFSET_CSS = 34;
+let displayScale = 1; // canvas px ต่อ CSS px
+
+function refreshDisplayScale() {
+  if (!targetCanvas) return;
+  const rect = targetCanvas.getBoundingClientRect();
+  displayScale = rect.width > 0 ? targetCanvas.width / rect.width : 1;
+}
+
+const getHandleRadius = () => Math.max(HANDLE_SIZE, HANDLE_RADIUS_CSS * displayScale);
+const getRotateOffset = () => Math.max(ROTATE_HANDLE_OFFSET, ROTATE_OFFSET_CSS * displayScale);
+
+// Alpha hit test
+// กรอบรูปมีขนาดเต็ม canvas ถ้าเช็คแค่สี่เหลี่ยมจะกินทุกคลิกจนจับสติกเกอร์ไม่ได้
+// จึงเช็คความโปร่งใสของพิกเซลจริง (ช่วยเรื่องสติกเกอร์ซ้อนกันด้วย)
+const ALPHA_HIT_THRESHOLD = 10; // ค่า alpha (0-255) ที่ถือว่า "มีเนื้อภาพ"
+const HIT_MASK_MAX_SIDE = 256;  // ด้านยาวสุดของมาสก์ (ย่อส่วนเพื่อประหยัดหน่วยความจำ)
+
+// สีของ UI ที่วาดลง canvas — CSS จับไม่ได้ จึงอ่านค่าจาก design token ครั้งเดียวตอน init
+// (renderSelectionOverlay อยู่ใน render loop ห้ามเรียก getComputedStyle ทุกเฟรม)
+const THEME = {
+  box: '#5B2FAE',
+  rotate: '#5B2FAE',
+  scale: '#B02455',
+  remove: '#A81932',
+  onHandle: '#FFFFFF',
+  handleShadow: 'rgba(43, 34, 51, 0.35)',
+};
+
+function loadThemeColors() {
+  if (typeof window === 'undefined') return;
+  const css = getComputedStyle(document.documentElement);
+  const pick = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+  THEME.box = pick('--lav-ink', THEME.box);
+  THEME.rotate = pick('--lav-ink', THEME.rotate);
+  THEME.scale = pick('--pink-ink', THEME.scale);
+  THEME.remove = pick('--danger-ink', THEME.remove);
+  THEME.onHandle = pick('--text-on-accent', THEME.onHandle);
+  THEME.handleShadow = pick('--scrim', THEME.handleShadow);
+}
 
 /**
  * Initializes the Canvas Engine with a target HTML5 <canvas> element.
@@ -35,6 +79,8 @@ export function initCanvasEngine(canvasElement, options = {}) {
 
   targetCanvas = canvasElement;
   ctx = targetCanvas.getContext('2d');
+
+  loadThemeColors();
 
   if (options.width) targetCanvas.width = options.width;
   if (options.height) targetCanvas.height = options.height;
@@ -65,6 +111,8 @@ export function setTargetCanvas(canvasElement) {
 
   targetCanvas = canvasElement;
   ctx = targetCanvas.getContext('2d');
+
+  loadThemeColors();
   
   setupPointerEvents();
   scheduleRender();
@@ -307,6 +355,7 @@ export function getSelectedLayerId() {
 export function renderCanvas() {
   if (!targetCanvas || !ctx) return;
 
+  refreshDisplayScale();
   ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
 
   const baseLayers = layers.filter(l => l.type === 'base');
@@ -362,46 +411,50 @@ function renderSelectionOverlay(layer) {
 
   const halfW = w / 2;
   const halfH = h / 2;
+  const rotateOffset = getRotateOffset();
 
   // Bounding Box
-  ctx.strokeStyle = '#6366f1';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([6, 4]);
+  ctx.strokeStyle = THEME.box;
+  ctx.lineWidth = 2 * displayScale;
+  ctx.setLineDash([6 * displayScale, 4 * displayScale]);
   ctx.strokeRect(-halfW, -halfH, w, h);
   ctx.setLineDash([]);
 
   // Connection Line to Rotate Handle
   ctx.beginPath();
   ctx.moveTo(0, -halfH);
-  ctx.lineTo(0, -halfH - ROTATE_HANDLE_OFFSET);
-  ctx.strokeStyle = '#6366f1';
+  ctx.lineTo(0, -halfH - rotateOffset);
+  ctx.strokeStyle = THEME.box;
   ctx.stroke();
 
   // 1. Rotate Handle (Top)
-  drawHandleCircle(0, -halfH - ROTATE_HANDLE_OFFSET, '#818cf8', '🔄');
+  drawHandleCircle(0, -halfH - rotateOffset, THEME.rotate, '🔄');
 
   // 2. Scale Handle (Bottom-Right)
-  drawHandleCircle(halfW, halfH, '#ec4899', '↘️');
+  drawHandleCircle(halfW, halfH, THEME.scale, '↘️');
 
   // 3. Delete Handle (Top-Left)
-  drawHandleCircle(-halfW, -halfH, '#ef4444', '✖️');
+  drawHandleCircle(-halfW, -halfH, THEME.remove, '✖️');
 
   ctx.restore();
 }
 
 function drawHandleCircle(x, y, color, symbol) {
+  const r = getHandleRadius();
+
   ctx.beginPath();
-  ctx.arc(x, y, HANDLE_SIZE, 0, Math.PI * 2);
+  ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fillStyle = color;
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
-  ctx.shadowBlur = 6;
+  ctx.shadowColor = THEME.handleShadow;
+  ctx.shadowBlur = 6 * displayScale;
   ctx.fill();
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = THEME.onHandle;
+  ctx.lineWidth = 2 * displayScale;
   ctx.stroke();
 
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '10px sans-serif';
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = THEME.onHandle;
+  ctx.font = Math.round(r * 1.05) + 'px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(symbol, x, y);
@@ -434,6 +487,7 @@ function getCanvasCoordinates(e) {
 }
 
 function handlePointerDown(e) {
+  refreshDisplayScale();
   const coords = getCanvasCoordinates(e);
 
   // Check handles of selected layer first
@@ -536,33 +590,24 @@ function handleWheel(e) {
  * Checks if point is inside layer handles (Rotate, Scale, Delete).
  */
 function checkHandleHit(point, layer) {
-  const rad = ((layer.rotation || 0) * Math.PI) / 180;
-  const cos = Math.cos(-rad);
-  const sin = Math.sin(-rad);
+  const { localX, localY, halfW, halfH } = toLayerLocal(point, layer);
 
-  const dx = point.x - layer.x;
-  const dy = point.y - layer.y;
+  // ต้องใช้ค่าชุดเดียวกับตอนวาด ไม่งั้นพื้นที่กดจะเพี้ยนจากวงกลมที่เห็น
+  const hitR = getHandleRadius() + 6 * displayScale;
+  const rotateOffset = getRotateOffset();
 
-  // Un-rotate point into local layer space
-  const localX = dx * cos - dy * sin;
-  const localY = dx * sin + dy * cos;
-
-  const scale = layer.scale || 1;
-  const halfW = (layer.width * scale) / 2;
-  const halfH = (layer.height * scale) / 2;
-
-  // 1. Rotate Handle (0, -halfH - ROTATE_HANDLE_OFFSET)
-  if (Math.hypot(localX - 0, localY - (-halfH - ROTATE_HANDLE_OFFSET)) <= HANDLE_SIZE + 4) {
+  // 1. Rotate Handle (0, -halfH - rotateOffset)
+  if (Math.hypot(localX - 0, localY - (-halfH - rotateOffset)) <= hitR) {
     return 'rotate';
   }
 
   // 2. Scale Handle (halfW, halfH)
-  if (Math.hypot(localX - halfW, localY - halfH) <= HANDLE_SIZE + 4) {
+  if (Math.hypot(localX - halfW, localY - halfH) <= hitR) {
     return 'scale';
   }
 
   // 3. Delete Handle (-halfW, -halfH)
-  if (Math.hypot(localX - (-halfW), localY - (-halfH)) <= HANDLE_SIZE + 4) {
+  if (Math.hypot(localX - (-halfW), localY - (-halfH)) <= hitR) {
     return 'delete';
   }
 
@@ -570,9 +615,10 @@ function checkHandleHit(point, layer) {
 }
 
 /**
- * Checks if point is inside transformed layer rectangle.
+ * แปลงจุดบน canvas เข้าสู่ระบบพิกัดภายในของ layer (หมุนกลับแล้ว)
+ * @returns {{localX: number, localY: number, halfW: number, halfH: number}}
  */
-function isPointInsideLayer(point, layer) {
+function toLayerLocal(point, layer) {
   const rad = ((layer.rotation || 0) * Math.PI) / 180;
   const cos = Math.cos(-rad);
   const sin = Math.sin(-rad);
@@ -580,14 +626,70 @@ function isPointInsideLayer(point, layer) {
   const dx = point.x - layer.x;
   const dy = point.y - layer.y;
 
-  const localX = dx * cos - dy * sin;
-  const localY = dx * sin + dy * cos;
-
   const scale = layer.scale || 1;
-  const halfW = (layer.width * scale) / 2;
-  const halfH = (layer.height * scale) / 2;
 
-  return localX >= -halfW && localX <= halfW && localY >= -halfH && localY <= halfH;
+  return {
+    localX: dx * cos - dy * sin,
+    localY: dx * sin + dy * cos,
+    halfW: (layer.width * scale) / 2,
+    halfH: (layer.height * scale) / 2
+  };
+}
+
+/**
+ * สร้าง alpha mask ย่อส่วนของรูปใน layer (ทำครั้งเดียวแล้ว cache ไว้บน layer)
+ * มาสก์ขึ้นกับตัวรูปอย่างเดียว ไม่ขึ้นกับ scale/rotation จึงไม่ต้องล้างตอนย่อ/ขยาย/หมุน
+ * @returns {{w: number, h: number, mask: Uint8Array}|null} null = อ่านพิกเซลไม่ได้
+ */
+function getHitMask(layer) {
+  if (layer._hitMask !== undefined) return layer._hitMask;
+
+  try {
+    const iw = layer.image.naturalWidth || layer.image.width;
+    const ih = layer.image.naturalHeight || layer.image.height;
+    if (!iw || !ih) {
+      layer._hitMask = null;
+      return null;
+    }
+
+    const k = Math.min(1, HIT_MASK_MAX_SIDE / Math.max(iw, ih));
+    const w = Math.max(1, Math.round(iw * k));
+    const h = Math.max(1, Math.round(ih * k));
+
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const cx = c.getContext('2d', { willReadFrequently: true });
+    cx.drawImage(layer.image, 0, 0, w, h);
+
+    const data = cx.getImageData(0, 0, w, h).data;
+    const mask = new Uint8Array(w * h);
+    for (let i = 0; i < mask.length; i++) mask[i] = data[i * 4 + 3];
+
+    layer._hitMask = { w, h, mask };
+  } catch (_) {
+    // canvas ปนเปื้อน (รูปข้ามโดเมนที่ไม่มี CORS header) → ถอยไปใช้กรอบสี่เหลี่ยมแบบเดิม
+    layer._hitMask = null;
+  }
+
+  return layer._hitMask;
+}
+
+/**
+ * Checks if point is inside transformed layer, ignoring transparent pixels.
+ */
+function isPointInsideLayer(point, layer) {
+  const { localX, localY, halfW, halfH } = toLayerLocal(point, layer);
+
+  if (localX < -halfW || localX > halfW || localY < -halfH || localY > halfH) return false;
+
+  const hm = getHitMask(layer);
+  if (!hm) return true;
+
+  const u = Math.min(hm.w - 1, Math.max(0, Math.floor(((localX + halfW) / (halfW * 2)) * hm.w)));
+  const v = Math.min(hm.h - 1, Math.max(0, Math.floor(((localY + halfH) / (halfH * 2)) * hm.h)));
+
+  return hm.mask[v * hm.w + u] > ALPHA_HIT_THRESHOLD;
 }
 
 /**
