@@ -97,6 +97,8 @@ const FILTERS_CATALOG = [
 let currentUser = null;
 let lastUploadedStickerBlob = null;
 let lastUploadedStickerUrl = null;
+let lastUploadedFrameBlob = null;
+let lastUploadedFrameUrl = null;
 
 // Camera Studio State
 let activeFilterIndex = 0;
@@ -121,10 +123,10 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
     <nav class="nav-tabs">
-      <button class="nav-btn active" id="tabCamera">📷 ถ่ายภาพ</button>
-      <button class="nav-btn" id="tabEditor">🎨 ตกแต่ง</button>
-      <button class="nav-btn" id="tabTemplateGallery">📁 เทมเพลต</button>
-      <button class="nav-btn" id="tabGallery">🖼️ คลังภาพ (<span id="galleryCount">0</span>)</button>
+      <button class="nav-btn active" id="tabCamera"><span class="nav-ico">📷</span><span class="nav-label">ถ่ายภาพ</span></button>
+      <button class="nav-btn" id="tabEditor"><span class="nav-ico">🎨</span><span class="nav-label">ตกแต่ง</span></button>
+      <button class="nav-btn" id="tabTemplateGallery"><span class="nav-ico">📁</span><span class="nav-label">เทมเพลต</span></button>
+      <button class="nav-btn" id="tabGallery"><span class="nav-ico">🖼️</span><span class="nav-label">คลังภาพ (<span id="galleryCount">0</span>)</span></button>
     </nav>
   </header>
 
@@ -167,12 +169,14 @@ document.querySelector('#app').innerHTML = `
             <div class="cam-left-panel">
               <!-- Aspect Ratio Selector -->
               <div class="aspect-ratio-group">
+                <span class="panel-label">สัดส่วน</span>
                 <button class="btn-aspect-opt active" id="btnAspectActive" title="กดเปลี่ยนอัตราส่วนภาพ">4:3</button>
                 <button class="btn-arrow-toggle" id="btnAspectArrow" title="กดเปลี่ยนอัตราส่วนภาพ">▼</button>
               </div>
 
               <!-- Filter Swatches (3 visible at a time) -->
               <div class="filter-group">
+                <span class="panel-label">ฟิลเตอร์</span>
                 <button class="btn-arrow-toggle" id="btnFilterUp">▲</button>
                 <div class="filter-carousel-viewport">
                   <div class="filter-carousel-track" id="filterCarouselTrack">
@@ -216,12 +220,14 @@ document.querySelector('#app').innerHTML = `
             <div class="cam-right-panel">
               <!-- Timer Selector -->
               <div class="timer-group">
+                <span class="panel-label">ตั้งเวลา</span>
                 <button class="btn-timer-opt active" id="btnTimerActive">3s</button>
                 <button class="btn-arrow-toggle" id="btnTimerArrow">▼</button>
               </div>
 
               <!-- Brightness Slider -->
               <div class="brightness-group">
+                <span class="panel-label">ความสว่าง</span>
                 <span class="brightness-icon">☀️</span>
                 <div class="brightness-slider-wrap">
                   <input type="range" class="brightness-input" id="brightnessSlider" min="0.5" max="1.5" step="0.05" value="1">
@@ -242,11 +248,13 @@ document.querySelector('#app').innerHTML = `
               <!-- Frame Popup Button -->
               <button class="btn-tool-icon" id="btnToolFrame" title="เลือกกรอบรูป">
                 🖼️
+                <span class="tool-label">กรอบ</span>
               </button>
 
               <!-- Sticker Popup Button -->
               <button class="btn-tool-icon" id="btnToolSticker" title="เลือกสติกเกอร์">
                 ⭐
+                <span class="tool-label">สติกเกอร์</span>
                 <span class="badge-plus">+</span>
               </button>
 
@@ -258,12 +266,14 @@ document.querySelector('#app').innerHTML = `
               <!-- Burst Mode Button -->
               <button class="btn-tool-icon" id="btnToolBurst" title="ถ่ายภาพเรียงต่อกัน">
                 🎞️
+                <span class="tool-label">ต่อเนื่อง</span>
                 <span class="badge-count" id="burstBadge">1x</span>
               </button>
 
               <!-- Grid Overlay Button -->
               <button class="btn-tool-icon" id="btnToolGrid" title="เปิด/ปิด Grid">
                 #
+                <span class="tool-label">เส้นกริด</span>
               </button>
             </div>
           </div>
@@ -310,22 +320,24 @@ document.querySelector('#app').innerHTML = `
         <!-- Scrollable Asset Galleries -->
         <div class="asset-selector-box">
           <div class="asset-tabs">
-            <button class="asset-tab-btn active" id="tabFrames">🖼️ กรอบรูป (${FRAMES_CATALOG.length})</button>
+            <button class="asset-tab-btn active" id="tabFrames">🖼️ กรอบรูป (<span id="frameTabCount">${FRAMES_CATALOG.length}</span>)</button>
             <button class="asset-tab-btn" id="tabStickers">⭐ สติกเกอร์ (<span id="stickerTabCount">${STICKERS_CATALOG.length}</span>)</button>
             <button class="asset-tab-btn" id="tabUpload">📤 อัปโหลด AI</button>
           </div>
 
-          <div class="scroll-gallery" id="galleryFrames">
-            <div class="gallery-item none-item" id="btnRemoveFrame">
-              <span class="none-icon">🚫</span>
-              <span class="item-name">ไม่ใช้กรอบ</span>
+          <!-- แถบความคืบหน้า: ใช้ร่วมกันระหว่างอัปโหลดกรอบ (แท็บกรอบรูป) และอัปโหลดสติกเกอร์ (แท็บอัปโหลด)
+               ถ้าอยู่ใน #galleryUpload จะถูกซ่อนตอนอยู่แท็บกรอบรูป -->
+          <div class="progress-container hidden" id="progressContainer">
+            <div class="progress-bar-bg">
+              <div class="progress-bar-fill" id="progressBarFill" style="width: 0%"></div>
             </div>
-            ${FRAMES_CATALOG.map(f => `
-              <div class="gallery-item frame-item" data-src="${f.src}" data-id="${f.id}">
-                <img src="${f.src}" alt="${f.name}" />
-                <span class="item-name">${f.name}</span>
-              </div>
-            `).join('')}
+            <span class="progress-text" id="progressText">กำลังประมวลผล...</span>
+          </div>
+
+          <div class="frame-panel" id="framePanel">
+            <!-- เนื้อในสร้างจาก renderFrameGallery() เพื่อให้กรอบที่อัปโหลดเข้ามาทีหลังแสดงผลได้ -->
+            <div class="scroll-gallery" id="galleryFrames"></div>
+            <button class="btn btn-sm btn-secondary hidden" id="btnSaveCustomFrame">💾 บันทึกกรอบนี้ลงคลังเพื่อใช้ซ้ำ</button>
           </div>
 
           <div class="scroll-gallery hidden" id="galleryStickers"></div>
@@ -340,13 +352,6 @@ document.querySelector('#app').innerHTML = `
               <input type="checkbox" id="chkRemoveBg" checked>
               <span>ตัดพื้นหลังอัตโนมัติ (MediaPipe AI + Smart Color Key)</span>
             </label>
-
-            <div class="progress-container hidden" id="progressContainer">
-              <div class="progress-bar-bg">
-                <div class="progress-bar-fill" id="progressBarFill" style="width: 0%"></div>
-              </div>
-              <span class="progress-text" id="progressText">กำลังประมวลผล...</span>
-            </div>
 
             <!-- Save Custom Sticker Button -->
             <button class="btn btn-sm btn-secondary hidden" id="btnSaveCustomSticker">💾 บันทึกสติกเกอร์นี้ลงคลังเพื่อใช้ซ้ำ</button>
@@ -500,7 +505,10 @@ const tabFrames = document.querySelector('#tabFrames');
 const tabStickers = document.querySelector('#tabStickers');
 const tabUpload = document.querySelector('#tabUpload');
 const stickerTabCount = document.querySelector('#stickerTabCount');
+const frameTabCount = document.querySelector('#frameTabCount');
 
+const framePanel = document.querySelector('#framePanel');
+const btnSaveCustomFrame = document.querySelector('#btnSaveCustomFrame');
 const galleryFrames = document.querySelector('#galleryFrames');
 const galleryStickers = document.querySelector('#galleryStickers');
 const galleryUpload = document.querySelector('#galleryUpload');
@@ -549,6 +557,7 @@ let templateCategory = 'my';
 
 // Init Canvas Engine
 initCanvasEngine(canvasElement);
+renderFrameGallery();
 renderStickerGallery();
 
 setOnSelectionChange(() => {
@@ -563,11 +572,13 @@ if (isSupabaseConfigured) {
   supabaseService.getCurrentUser().then(user => {
     updateUserAuthUI(user);
     loadSavedStickersFromSupabase();
+    loadSavedFramesFromSupabase();
   });
 
   supabaseService.onAuthStateChange((user) => {
     updateUserAuthUI(user);
     loadSavedStickersFromSupabase();
+    loadSavedFramesFromSupabase();
   });
 }
 
@@ -613,6 +624,78 @@ function renderStickerGallery() {
   });
 
   stickerTabCount.textContent = STICKERS_CATALOG.length;
+}
+
+/**
+ * Render Frame Gallery Carousel
+ * ต้อง render ใหม่ทุกครั้งที่ FRAMES_CATALOG เปลี่ยน (เช่น อัปโหลดกรอบใหม่)
+ */
+function renderFrameGallery() {
+  if (!galleryFrames) return;
+
+  galleryFrames.innerHTML = `
+    <div class="gallery-item none-item" id="btnRemoveFrame">
+      <span class="none-icon">🚫</span>
+      <span class="item-name">ไม่ใช้กรอบ</span>
+    </div>
+    <label class="gallery-item upload-item" title="แนะนำไฟล์ PNG ที่เจาะกลางโปร่งใส ขนาด 1280×720">
+      <span class="none-icon">➕</span>
+      <span class="item-name">อัปโหลดกรอบ</span>
+      <input type="file" id="frameUploader" accept="image/*" class="hidden-input">
+    </label>
+    ${FRAMES_CATALOG.map(f => `
+      <div class="gallery-item frame-item" data-src="${f.src}" data-id="${f.id}">
+        <img src="${f.src}" alt="${f.name}" />
+        <span class="item-name">${f.name}</span>
+      </div>
+    `).join('')}
+  `;
+
+  galleryFrames.querySelector('#btnRemoveFrame').addEventListener('click', () => {
+    const frameLayer = getLayers().find(l => l.type === 'frame');
+    if (frameLayer) {
+      removeLayer(frameLayer.id);
+    }
+    refreshLayerListUI();
+  });
+
+  galleryFrames.querySelector('#frameUploader').addEventListener('change', handleFrameUpload);
+
+  galleryFrames.querySelectorAll('.frame-item').forEach(item => {
+    item.addEventListener('click', async (e) => {
+      const src = e.currentTarget.dataset.src;
+      const id = e.currentTarget.dataset.id;
+      await addLayer({
+        type: 'frame',
+        image: src,
+        id: `frame-${id}`
+      });
+      refreshLayerListUI();
+    });
+  });
+
+  frameTabCount.textContent = FRAMES_CATALOG.length;
+}
+
+async function loadSavedFramesFromSupabase() {
+  if (!isSupabaseConfigured) return;
+  try {
+    const frames = await supabaseService.getFrames();
+    if (frames && frames.length > 0) {
+      frames.forEach(fr => {
+        if (!FRAMES_CATALOG.some(f => f.id === fr.frame_id)) {
+          FRAMES_CATALOG.unshift({
+            id: fr.frame_id,
+            name: fr.name || 'กรอบบันทึก',
+            src: fr.image_url
+          });
+        }
+      });
+      renderFrameGallery();
+    }
+  } catch (e) {
+    console.warn('Could not load frames from Supabase:', e.message);
+  }
 }
 
 async function loadSavedStickersFromSupabase() {
@@ -678,7 +761,7 @@ tabFrames.addEventListener('click', () => {
   tabFrames.classList.add('active');
   tabStickers.classList.remove('active');
   tabUpload.classList.remove('active');
-  galleryFrames.classList.remove('hidden');
+  framePanel.classList.remove('hidden');
   galleryStickers.classList.add('hidden');
   galleryUpload.classList.add('hidden');
 });
@@ -688,7 +771,7 @@ tabStickers.addEventListener('click', () => {
   tabFrames.classList.remove('active');
   tabUpload.classList.remove('active');
   galleryStickers.classList.remove('hidden');
-  galleryFrames.classList.add('hidden');
+  framePanel.classList.add('hidden');
   galleryUpload.classList.add('hidden');
 });
 
@@ -697,7 +780,7 @@ tabUpload.addEventListener('click', () => {
   tabFrames.classList.remove('active');
   tabStickers.classList.remove('active');
   galleryUpload.classList.remove('hidden');
-  galleryFrames.classList.add('hidden');
+  framePanel.classList.add('hidden');
   galleryStickers.classList.add('hidden');
 });
 
@@ -1155,12 +1238,16 @@ function composeBurstGrid(frames) {
   composite.height = totalH;
   const cctx = composite.getContext('2d');
 
-  // Photobooth Card background frame
-  cctx.fillStyle = '#18181b';
+  // Photobooth Card background frame — ใช้ design token เดียวกับธีมพาสเทล
+  const themeCss = getComputedStyle(document.documentElement);
+  const cardBg = themeCss.getPropertyValue('--bg-page').trim() || '#FFF5F7';
+  const cardBorder = themeCss.getPropertyValue('--pink').trim() || '#FFB3C7';
+
+  cctx.fillStyle = cardBg;
   cctx.fillRect(0, 0, totalW, totalH);
 
   // Decorative border
-  cctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  cctx.strokeStyle = cardBorder;
   cctx.lineWidth = 2;
   cctx.strokeRect(8, 8, totalW - 16, totalH - 16);
 
@@ -1298,29 +1385,156 @@ async function handleCapture() {
 }
 
 
-/**
- * Frame Catalog Handler
- */
-document.querySelectorAll('.frame-item').forEach(item => {
-  item.addEventListener('click', async (e) => {
-    const src = e.currentTarget.dataset.src;
-    const id = e.currentTarget.dataset.id;
-    await addLayer({
-      type: 'frame',
-      image: src,
-      id: `frame-${id}`
-    });
-    refreshLayerListUI();
-  });
-});
+/* Frame Catalog Handler ย้ายไปผูกใน renderFrameGallery() แล้ว
+   (ของเดิมผูกครั้งเดียวตอนบูต กรอบที่อัปโหลดทีหลังจึงกดไม่ได้) */
 
-document.querySelector('#btnRemoveFrame').addEventListener('click', () => {
-  const layers = getLayers();
-  const frameLayer = layers.find(l => l.type === 'frame');
-  if (frameLayer) {
-    removeLayer(frameLayer.id);
+/**
+ * --- Custom Frame Upload ---
+ */
+
+// ค่า alpha ที่ยังถือว่า "ทึบ"
+const FRAME_OPAQUE_ALPHA = 250;
+
+function loadImageFromBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('อ่านไฟล์ภาพไม่ได้')); };
+    img.src = url;
+  });
+}
+
+/**
+ * ตรวจพื้นที่กลางภาพ (40% ตรงกลาง) ว่าโปร่งใสพอจะเป็นช่องใส่รูปหรือยัง
+ * และคืนสีเฉลี่ยตรงกลางไว้ใช้เป็น targetBgColor ตอนตัดพื้นหลัง
+ */
+async function inspectFrameCenter(blob) {
+  const img = await loadImageFromBlob(blob);
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  if (!iw || !ih) throw new Error('ภาพไม่มีขนาด');
+
+  const k = Math.min(1, 256 / Math.max(iw, ih));
+  const w = Math.max(1, Math.round(iw * k));
+  const h = Math.max(1, Math.round(ih * k));
+
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const cx = c.getContext('2d', { willReadFrequently: true });
+  cx.drawImage(img, 0, 0, w, h);
+
+  const x0 = Math.floor(w * 0.3);
+  const y0 = Math.floor(h * 0.3);
+  const cw = Math.max(1, Math.ceil(w * 0.7) - x0);
+  const ch = Math.max(1, Math.ceil(h * 0.7) - y0);
+  const data = cx.getImageData(x0, y0, cw, ch).data;
+
+  let opaque = 0, total = 0, r = 0, g = 0, b = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    total++;
+    if (data[i + 3] >= FRAME_OPAQUE_ALPHA) {
+      opaque++;
+      r += data[i]; g += data[i + 1]; b += data[i + 2];
+    }
   }
+
+  const ratio = total ? opaque / total : 0;
+  return {
+    isOpaque: ratio > 0.9,
+    color: opaque ? [Math.round(r / opaque), Math.round(g / opaque), Math.round(b / opaque)] : [255, 255, 255]
+  };
+}
+
+async function handleFrameUpload(e) {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file) return;
+
+  hideError();
+  let finalBlob = file;
+
+  try {
+    const before = await inspectFrameCenter(file);
+
+    if (before.isOpaque) {
+      const wantsCutout = confirm(
+        'ภาพนี้ทึบทั้งใบ ถ้าใช้เป็นกรอบจะบังรูปถ่ายทั้งหมด\n\n' +
+        'ต้องการให้ตัดพื้นที่ตรงกลางให้โปร่งใสไหม?'
+      );
+
+      if (wantsCutout) {
+        try {
+          updateProgress(10, 'กำลังตัดพื้นที่ตรงกลางของกรอบ...');
+          // โหมด color_key ปกติสุ่มสีจาก "มุมบน" ซึ่งบนภาพกรอบคือตัวลายกรอบ
+          // จึงส่งสีที่วัดจากกลางภาพเข้าไปเป็น targetBgColor เพื่อให้ตัดถูกที่
+          const processed = await removeBackground(file, {
+            mode: 'color_key',
+            targetBgColor: before.color,
+            threshold: 80,
+            feather: 30,
+            onProgress: ({ progress, message }) => updateProgress(progress, message),
+            onError: (err) => showError(`ตัดพื้นที่ตรงกลางขัดข้อง: ${err.message}`)
+          });
+
+          const after = await inspectFrameCenter(processed);
+          if (after.isOpaque) {
+            showError('ตัดพื้นที่ตรงกลางไม่สำเร็จ (สีตรงกลางไม่สม่ำเสมอพอ) จึงใช้ภาพต้นฉบับแทน — แนะนำอัปโหลดเป็น PNG ที่เจาะกลางโปร่งใสมาแล้ว');
+          } else {
+            finalBlob = processed;
+          }
+        } finally {
+          setTimeout(hideProgress, 1200);
+        }
+      }
+    }
+  } catch (err) {
+    showError(`ไม่สามารถใช้ไฟล์นี้เป็นกรอบได้: ${err.message}`);
+    return;
+  }
+
+  lastUploadedFrameBlob = finalBlob;
+  lastUploadedFrameUrl = URL.createObjectURL(finalBlob);
+
+  await addLayer({
+    type: 'frame',
+    image: lastUploadedFrameUrl,
+    id: `custom-frame-${Date.now()}`
+  });
+
+  btnSaveCustomFrame.classList.remove('hidden');
   refreshLayerListUI();
+}
+
+/**
+ * Save Custom Frame to Gallery Catalog (and Supabase Storage)
+ */
+btnSaveCustomFrame.addEventListener('click', async () => {
+  if (!lastUploadedFrameUrl) return;
+
+  const frameName = prompt('ตั้งชื่อกรอบรูปที่ต้องการบันทึก:', 'กรอบส่วนตัว') || 'กรอบส่วนตัว';
+  let finalUrl = lastUploadedFrameUrl;
+  let frameId = `custom-${Date.now()}`;
+
+  if (currentUser && isSupabaseConfigured && lastUploadedFrameBlob) {
+    try {
+      const frameRecord = await supabaseService.uploadFrame(lastUploadedFrameBlob, frameName);
+      if (frameRecord && frameRecord.image_url) {
+        finalUrl = frameRecord.image_url;
+        frameId = frameRecord.frame_id || frameId;
+      }
+    } catch (err) {
+      console.warn('Could not upload frame to Supabase:', err.message);
+      showError(`บันทึกขึ้น Supabase ไม่สำเร็จ: ${err.message} (ยังใช้กรอบนี้ได้ในเซสชันนี้)`);
+    }
+  }
+
+  FRAMES_CATALOG.unshift({ id: frameId, name: frameName, src: finalUrl });
+  renderFrameGallery();
+
+  alert(`🎉 บันทึกกรอบ "${frameName}" เรียบร้อยแล้ว! เลือกใช้ได้จากแถบ 🖼️ กรอบรูป`);
+  btnSaveCustomFrame.classList.add('hidden');
 });
 
 /**

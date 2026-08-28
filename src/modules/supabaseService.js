@@ -297,6 +297,73 @@ export class SupabaseService {
     }
     return data || [];
   }
+
+  /**
+   * --- Frame Storage Methods ---
+   * ต้องรัน supabase_frames.sql ใน Supabase SQL Editor ก่อนใช้งาน
+   */
+  async uploadFrame(file, name) {
+    const user = await this.getCurrentUser();
+    if (!user) {
+      throw new Error('กรุณาเข้าสู่ระบบก่อนอัปโหลดกรอบรูปส่วนตัว');
+    }
+
+    // Blob ที่ผ่านการตัดพื้นหลังไม่มี .name จึงหานามสกุลจาก MIME type เป็นหลัก
+    const fileExt = (file.type && file.type.split('/')[1])
+      || (typeof file.name === 'string' && file.name.includes('.') ? file.name.split('.').pop() : null)
+      || 'png';
+
+    const filePath = `frames/${user.id}/${Date.now()}_${Math.random().toString(36).substring(2, 6)}.${fileExt}`;
+
+    const { error: uploadError } = await supabase
+      .storage
+      .from('frames')
+      .upload(filePath, file, {
+        contentType: file.type || 'image/png',
+        cacheControl: '3600',
+        upsert: false
+      });
+
+    if (uploadError) {
+      throw handleSupabaseError(uploadError, 'อัปโหลดไฟล์กรอบรูปขัดข้อง');
+    }
+
+    const { data: { publicUrl } } = supabase
+      .storage
+      .from('frames')
+      .getPublicUrl(filePath);
+
+    const { data, error: dbError } = await supabase
+      .from('frames')
+      .insert({
+        user_id: user.id,
+        name: name || 'กรอบส่วนตัว',
+        image_url: publicUrl,
+        is_system_asset: false,
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (dbError) {
+      throw handleSupabaseError(dbError, 'บันทึกข้อมูลกรอบรูปขัดข้อง');
+    }
+    return data;
+  }
+
+  async getFrames() {
+    if (!isSupabaseConfigured) return [];
+
+    const { data, error } = await supabase
+      .from('frames')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      throw handleSupabaseError(error, 'ดึงข้อมูลกรอบรูปขัดข้อง');
+    }
+    return data || [];
+  }
 }
 
 export const supabaseService = new SupabaseService();
