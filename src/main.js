@@ -20,6 +20,7 @@ import {
   selectLayer,
   getSelectedLayerId,
   setOnSelectionChange,
+  setOnCanvasResize,
   setTargetCanvas,
   serializeDesignData,
   loadTemplateDesign,
@@ -28,7 +29,7 @@ import {
   getLayers
 } from './modules/canvasEngine.js';
 
-import { removeBackground } from './modules/segmenter.js';
+import { removeBackground, cutoutFrameSlots, loadFrameCanvas, floodFillRegion } from './modules/segmenter.js';
 import { supabaseService, isSupabaseConfigured } from './modules/supabaseService.js';
 import { appUI } from './ui/appUI.js';
 
@@ -105,8 +106,10 @@ let activeFilterIndex = 0;
 let activeTimerSeconds = 3;
 let activeBrightness = 1.0;
 let activeZoom = 1.0;
-let camPreviewLayers = [];  // preview layers (frames/stickers) on camera view
-let camPreviewRAF = null;   // requestAnimationFrame id for preview loop
+// true = กล้องไม่รองรับซูมฮาร์ดแวร์ จึงต้องซูมด้วย CSS transform แทน
+// ถ้าฮาร์ดแวร์รับงานแล้วยังใส่ CSS อีกจะกลายเป็นซูมซ้อนสองชั้น
+let usingCssZoom = true;
+let activeEditorFilter = 'none';   // ฟิลเตอร์ที่ใช้กับ base layer ในหน้าตกแต่ง
 let activeBurstCount = 1;
 let isGridActive = false;
 let currentAspectRatio = '4:3';
@@ -191,7 +194,6 @@ document.querySelector('#app').innerHTML = `
             <div class="cam-center-area">
               <div class="cam-preview-box" id="previewBox" style="aspect-ratio: 4 / 3;">
                 <video id="webcam" autoplay playsinline class="mirror"></video>
-                <canvas id="camPreviewCanvas"></canvas>
 
                 <!-- Grid 3x3 Overlay -->
                 <div class="cam-grid-overlay" id="camGridOverlay">
@@ -245,29 +247,16 @@ document.querySelector('#app').innerHTML = `
             </div>
 
             <div class="cam-toolbar">
-              <!-- Frame Popup Button -->
-              <button class="btn-tool-icon" id="btnToolFrame" title="เลือกกรอบรูป">
-                🖼️
-                <span class="tool-label">กรอบ</span>
-              </button>
-
-              <!-- Sticker Popup Button -->
-              <button class="btn-tool-icon" id="btnToolSticker" title="เลือกสติกเกอร์">
-                ⭐
-                <span class="tool-label">สติกเกอร์</span>
-                <span class="badge-plus">+</span>
-              </button>
-
-              <!-- Shutter / Capture Button -->
-              <button class="btn-shutter-rec" id="btnCapture" title="ถ่ายภาพ">
-                <div class="shutter-inner-dot"></div>
-              </button>
-
               <!-- Burst Mode Button -->
               <button class="btn-tool-icon" id="btnToolBurst" title="ถ่ายภาพเรียงต่อกัน">
                 🎞️
                 <span class="tool-label">ต่อเนื่อง</span>
                 <span class="badge-count" id="burstBadge">1x</span>
+              </button>
+
+              <!-- Shutter / Capture Button (อยู่ตรงกลางแถบ) -->
+              <button class="btn-shutter-rec" id="btnCapture" title="ถ่ายภาพ">
+                <div class="shutter-inner-dot"></div>
               </button>
 
               <!-- Grid Overlay Button -->
@@ -278,26 +267,6 @@ document.querySelector('#app').innerHTML = `
             </div>
           </div>
         </div>
-
-        <!-- Frame Floating Popup Modal -->
-        <div class="cam-popup-modal hidden" id="framePopupModal">
-          <div class="cam-popup-header">
-            <span class="cam-popup-title">🖼️ เลือกกรอบรูปในคลัง Database</span>
-            <button class="btn-popup-action" id="btnGoToEditorFromFrame">🎨 หน้าตกแต่ง / เพิ่มกรอบใหม่</button>
-            <button class="btn-popup-action" id="btnCloseFramePopup">▼ พับหน้าต่าง</button>
-          </div>
-          <div class="cam-popup-grid" id="framePopupGrid"></div>
-        </div>
-
-        <!-- Sticker Floating Popup Modal -->
-        <div class="cam-popup-modal hidden" id="stickerPopupModal">
-          <div class="cam-popup-header">
-            <span class="cam-popup-title">⭐ เลือกสติกเกอร์ในคลัง Database</span>
-            <button class="btn-popup-action" id="btnGoToEditorFromSticker">🎨 หน้าตกแต่ง / เพิ่มสติกเกอร์ใหม่</button>
-            <button class="btn-popup-action" id="btnCloseStickerPopup">▼ พับหน้าต่าง</button>
-          </div>
-          <div class="cam-popup-grid" id="stickerPopupGrid"></div>
-        </div>
       </div>
     </section>
 
@@ -306,6 +275,11 @@ document.querySelector('#app').innerHTML = `
       <div class="view-card">
         <div class="canvas-container">
           <canvas id="photoCanvas" width="1280" height="720"></canvas>
+        </div>
+
+        <div class="editor-filter-box">
+          <h4>🎞️ ฟิลเตอร์ภาพ (เปลี่ยนได้หลังถ่าย)</h4>
+          <div class="scroll-gallery" id="editorFilterRow"></div>
         </div>
 
         <div class="editor-actions">
@@ -337,7 +311,10 @@ document.querySelector('#app').innerHTML = `
           <div class="frame-panel" id="framePanel">
             <!-- เนื้อในสร้างจาก renderFrameGallery() เพื่อให้กรอบที่อัปโหลดเข้ามาทีหลังแสดงผลได้ -->
             <div class="scroll-gallery" id="galleryFrames"></div>
-            <button class="btn btn-sm btn-secondary hidden" id="btnSaveCustomFrame">💾 บันทึกกรอบนี้ลงคลังเพื่อใช้ซ้ำ</button>
+            <div class="frame-actions hidden" id="frameActions">
+              <button class="btn btn-sm btn-secondary" id="btnManualCutout">✂️ เจาะช่องเอง</button>
+              <button class="btn btn-sm btn-secondary" id="btnSaveCustomFrame">💾 บันทึกกรอบนี้ลงคลังเพื่อใช้ซ้ำ</button>
+            </div>
           </div>
 
           <div class="scroll-gallery hidden" id="galleryStickers"></div>
@@ -440,6 +417,30 @@ document.querySelector('#app').innerHTML = `
       </form>
     </div>
   </div>
+
+  <!-- Manual Frame Slot Cutout -->
+  <div class="modal-overlay hidden" id="frameCutoutModal">
+    <div class="modal-card cutout-card">
+      <button class="btn-close" id="btnCloseCutoutModal">✖️</button>
+      <h3>✂️ เจาะช่องใส่รูปเอง</h3>
+      <p class="subtitle">คลิกบนช่องที่ต้องการเจาะให้โปร่งใส คลิกได้หลายช่อง — พื้นตารางคือส่วนที่โปร่งแล้ว</p>
+
+      <div class="cutout-stage">
+        <canvas id="frameCutoutCanvas"></canvas>
+      </div>
+
+      <label class="cutout-tolerance">
+        <span>ความไว: <b id="cutoutToleranceValue">30</b></span>
+        <input type="range" id="cutoutTolerance" min="10" max="90" step="5" value="30">
+      </label>
+
+      <div class="cutout-actions">
+        <button class="btn btn-sm btn-secondary" id="btnCutoutReset">↩️ ล้างทั้งหมด</button>
+        <button class="btn btn-sm btn-danger" id="btnCutoutCancel">ยกเลิก</button>
+        <button class="btn btn-sm btn-primary" id="btnCutoutApply">ใช้กรอบนี้</button>
+      </div>
+    </div>
+  </div>
 `;
 
 // DOM Elements
@@ -455,6 +456,13 @@ const viewGallery = document.querySelector('#viewGallery');
 
 const videoElement = document.querySelector('#webcam');
 const canvasElement = document.querySelector('#photoCanvas');
+const canvasContainer = document.querySelector('.canvas-container');
+const editorFilterRow = document.querySelector('#editorFilterRow');
+
+// ชุด id ของกรอบ/สติกเกอร์ที่ติดมากับแอป (เก็บก่อนมีการเพิ่มของผู้ใช้)
+// ใช้ตัดสินว่าชิ้นไหนลบได้
+const BUILTIN_FRAME_IDS = new Set(FRAMES_CATALOG.map(f => f.id));
+const BUILTIN_STICKER_IDS = new Set(STICKERS_CATALOG.map(s => s.id));
 const countdownOverlay = document.querySelector('#countdownOverlay');
 const countdownNumber = document.querySelector('#countdownNumber');
 
@@ -468,7 +476,6 @@ const btnSaveTemplate = document.querySelector('#btnSaveTemplate');
 
 // Camera Studio DOM Elements
 const previewBox = document.querySelector('#previewBox');
-const camPreviewCanvas = document.querySelector('#camPreviewCanvas');
 const btnAspectActive = document.querySelector('#btnAspectActive');
 const aspectCollapsible = document.querySelector('#aspectCollapsible');
 const btnAspectArrow = document.querySelector('#btnAspectArrow');
@@ -489,18 +496,6 @@ const btnToolGrid = document.querySelector('#btnToolGrid');
 const btnToolBurst = document.querySelector('#btnToolBurst');
 const burstBadge = document.querySelector('#burstBadge');
 
-const btnToolFrame = document.querySelector('#btnToolFrame');
-const framePopupModal = document.querySelector('#framePopupModal');
-const framePopupGrid = document.querySelector('#framePopupGrid');
-const btnGoToEditorFromFrame = document.querySelector('#btnGoToEditorFromFrame');
-const btnCloseFramePopup = document.querySelector('#btnCloseFramePopup');
-
-const btnToolSticker = document.querySelector('#btnToolSticker');
-const stickerPopupModal = document.querySelector('#stickerPopupModal');
-const stickerPopupGrid = document.querySelector('#stickerPopupGrid');
-const btnGoToEditorFromSticker = document.querySelector('#btnGoToEditorFromSticker');
-const btnCloseStickerPopup = document.querySelector('#btnCloseStickerPopup');
-
 const tabFrames = document.querySelector('#tabFrames');
 const tabStickers = document.querySelector('#tabStickers');
 const tabUpload = document.querySelector('#tabUpload');
@@ -509,6 +504,8 @@ const frameTabCount = document.querySelector('#frameTabCount');
 
 const framePanel = document.querySelector('#framePanel');
 const btnSaveCustomFrame = document.querySelector('#btnSaveCustomFrame');
+const frameActions = document.querySelector('#frameActions');
+const btnManualCutout = document.querySelector('#btnManualCutout');
 const galleryFrames = document.querySelector('#galleryFrames');
 const galleryStickers = document.querySelector('#galleryStickers');
 const galleryUpload = document.querySelector('#galleryUpload');
@@ -542,6 +539,15 @@ const btnToggleAuthMode = document.querySelector('#btnToggleAuthMode');
 const authToggleText = document.querySelector('#authToggleText');
 
 const saveTemplateModal = document.querySelector('#saveTemplateModal');
+
+const frameCutoutModal = document.querySelector('#frameCutoutModal');
+const frameCutoutCanvas = document.querySelector('#frameCutoutCanvas');
+const cutoutTolerance = document.querySelector('#cutoutTolerance');
+const cutoutToleranceValue = document.querySelector('#cutoutToleranceValue');
+const btnCloseCutoutModal = document.querySelector('#btnCloseCutoutModal');
+const btnCutoutReset = document.querySelector('#btnCutoutReset');
+const btnCutoutCancel = document.querySelector('#btnCutoutCancel');
+const btnCutoutApply = document.querySelector('#btnCutoutApply');
 const btnCloseTemplateModal = document.querySelector('#btnCloseTemplateModal');
 const saveTemplateForm = document.querySelector('#saveTemplateForm');
 const tplName = document.querySelector('#tplName');
@@ -559,10 +565,14 @@ let templateCategory = 'my';
 initCanvasEngine(canvasElement);
 renderFrameGallery();
 renderStickerGallery();
+renderEditorFilterRow();
 
 setOnSelectionChange(() => {
   refreshLayerListUI();
 });
+
+// กล่อง canvas ยืดตามภาพจริงทุกครั้งที่ขนาดเปลี่ยน (ถ่ายใหม่ / ใส่กรอบคนละสัดส่วน / โหลดเทมเพลต)
+setOnCanvasResize(() => syncCanvasContainerRatio());
 
 // Auto Start Camera
 handleStartCamera();
@@ -603,8 +613,31 @@ function renderStickerGallery() {
     <div class="gallery-item sticker-item" data-src="${s.src}" data-id="${s.id}">
       <img src="${s.src}" alt="${s.name}" />
       <span class="item-name">${s.name}</span>
+      ${BUILTIN_STICKER_IDS.has(s.id) ? '' : `<button class="btn-item-del" data-del="${s.id}" title="ลบสติกเกอร์นี้">✖️</button>`}
     </div>
   `).join('');
+
+  galleryStickers.querySelectorAll('.btn-item-del').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = e.currentTarget.dataset.del;
+      const item = STICKERS_CATALOG.find(s => s.id === id);
+      if (!confirm(`ลบสติกเกอร์ "${item ? item.name : id}" ออกจากคลัง?`)) return;
+
+      const idx = STICKERS_CATALOG.findIndex(s => s.id === id);
+      if (idx >= 0) STICKERS_CATALOG.splice(idx, 1);
+      renderStickerGallery();
+
+      if (currentUser && isSupabaseConfigured) {
+        try {
+          await supabaseService.deleteSticker(id);
+        } catch (err) {
+          console.warn('ลบสติกเกอร์บน Supabase ไม่สำเร็จ:', err.message);
+          showError(`ลบสติกเกอร์ออกจาก Supabase ไม่สำเร็จ: ${err.message}`);
+        }
+      }
+    });
+  });
 
   galleryStickers.querySelectorAll('.sticker-item').forEach(item => {
     item.addEventListener('click', async (e) => {
@@ -647,9 +680,33 @@ function renderFrameGallery() {
       <div class="gallery-item frame-item" data-src="${f.src}" data-id="${f.id}">
         <img src="${f.src}" alt="${f.name}" />
         <span class="item-name">${f.name}</span>
+        ${BUILTIN_FRAME_IDS.has(f.id) ? '' : `<button class="btn-item-del" data-del="${f.id}" title="ลบกรอบนี้">✖️</button>`}
       </div>
     `).join('')}
   `;
+
+  // ปุ่มลบขึ้นเฉพาะกรอบที่ผู้ใช้อัปโหลดเอง ของที่ติดมากับแอปลบไม่ได้
+  galleryFrames.querySelectorAll('.btn-item-del').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = e.currentTarget.dataset.del;
+      const item = FRAMES_CATALOG.find(f => f.id === id);
+      if (!confirm(`ลบกรอบ "${item ? item.name : id}" ออกจากคลัง?`)) return;
+
+      const idx = FRAMES_CATALOG.findIndex(f => f.id === id);
+      if (idx >= 0) FRAMES_CATALOG.splice(idx, 1);
+      renderFrameGallery();
+
+      if (currentUser && isSupabaseConfigured) {
+        try {
+          await supabaseService.deleteFrame(id);
+        } catch (err) {
+          console.warn('ลบกรอบบน Supabase ไม่สำเร็จ:', err.message);
+          showError(`ลบกรอบออกจาก Supabase ไม่สำเร็จ: ${err.message}`);
+        }
+      }
+    });
+  });
 
   galleryFrames.querySelector('#btnRemoveFrame').addEventListener('click', () => {
     const frameLayer = getLayers().find(l => l.type === 'frame');
@@ -675,6 +732,29 @@ function renderFrameGallery() {
   });
 
   frameTabCount.textContent = FRAMES_CATALOG.length;
+}
+
+/**
+ * แถวฟิลเตอร์ในหน้าตกแต่ง — เปลี่ยนฟิลเตอร์หลังถ่ายได้
+ * ฟิลเตอร์ถูกเก็บเป็นคุณสมบัติของ base layer แล้วใส่ตอนวาด ไม่ได้อบติดพิกเซล
+ */
+function renderEditorFilterRow() {
+  if (!editorFilterRow) return;
+
+  editorFilterRow.innerHTML = FILTERS_CATALOG.map(f => `
+    <div class="gallery-item filter-item ${f.css === activeEditorFilter ? 'selected' : ''}" data-css="${f.css}">
+      <div class="filter-swatch-box ${f.class}"></div>
+      <span class="item-name">${f.name}</span>
+    </div>
+  `).join('');
+
+  editorFilterRow.querySelectorAll('.filter-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      activeEditorFilter = e.currentTarget.dataset.css;
+      updateLayer('base-layer', { filter: activeEditorFilter });
+      renderEditorFilterRow();
+    });
+  });
 }
 
 async function loadSavedFramesFromSupabase() {
@@ -831,7 +911,7 @@ function applyLiveStreamFilters() {
   // Zoom & Mirror transforms
   const isMirrored = videoElement.classList.contains('mirror');
   const mirrorScale = isMirrored ? 'scaleX(-1)' : 'scaleX(1)';
-  const zoomScale = `scale(${activeZoom})`;
+  const zoomScale = `scale(${usingCssZoom ? activeZoom : 1})`;
   videoElement.style.transform = `${mirrorScale} ${zoomScale}`;
 }
 
@@ -927,9 +1007,54 @@ brightnessSlider?.addEventListener('input', (e) => {
 
 zoomSlider?.addEventListener('input', async (e) => {
   activeZoom = parseFloat(e.target.value);
+  // ต้องรู้ผลของซูมฮาร์ดแวร์ก่อน ถึงจะตัดสินใจได้ว่าต้องซูมด้วย CSS ซ้ำหรือไม่
+  usingCssZoom = !(await setZoom(activeZoom));
   applyLiveStreamFilters();
-  await setZoom(activeZoom);
 });
+
+/**
+ * พื้นที่ของวิดีโอที่ "มองเห็นจริง" บนพรีวิว
+ * จำลองสูตรเดียวกับที่ CSS ทำ: object-fit: cover ของ .cam-preview-box
+ * แล้วตามด้วย transform: scale() ตอนซูม — เพื่อให้ภาพที่ถ่ายได้ตรงกับที่ตาเห็น
+ */
+function getCaptureCrop() {
+  const vw = videoElement.videoWidth || 1280;
+  const vh = videoElement.videoHeight || 720;
+
+  const [aw, ah] = currentAspectRatio.split(':').map(Number);
+  const target = aw / ah;
+
+  // object-fit: cover — ครอปกลางภาพให้ได้อัตราส่วนของกล่องพรีวิว
+  let sw, sh;
+  if (vw / vh > target) {
+    sh = vh;
+    sw = vh * target;
+  } else {
+    sw = vw;
+    sh = vw / target;
+  }
+
+  // CSS scale() ย่อพื้นที่ที่มองเห็นลงอีก (เฉพาะตอนที่ซูมด้วย CSS จริง)
+  const z = usingCssZoom ? (activeZoom || 1) : 1;
+  sw /= z;
+  sh /= z;
+
+  return {
+    sx: (vw - sw) / 2,
+    sy: (vh - sh) / 2,
+    sw: Math.max(1, Math.round(sw)),
+    sh: Math.max(1, Math.round(sh))
+  };
+}
+
+/**
+ * ให้กล่อง canvas ในหน้าตกแต่งยืดตามอัตราส่วนของภาพจริง
+ * (CSS ตั้ง 16/9 ไว้เป็นค่าเริ่มต้น ถ้าไม่เขียนทับภาพ 1:1 จะมีแถบดำซ้าย-ขวา)
+ */
+function syncCanvasContainerRatio() {
+  if (!canvasContainer || !canvasElement.width || !canvasElement.height) return;
+  canvasContainer.style.aspectRatio = `${canvasElement.width} / ${canvasElement.height}`;
+}
 
 // 5. Grid Overlay Toggle
 btnToolGrid?.addEventListener('click', () => {
@@ -949,204 +1074,6 @@ btnToolBurst?.addEventListener('click', () => {
   btnToolBurst.classList.toggle('active', activeBurstCount > 1);
 });
 
-// 7. Floating Popups (Frame & Sticker)
-btnToolFrame?.addEventListener('click', () => {
-  stickerPopupModal.classList.add('hidden');
-  btnToolSticker.classList.remove('active');
-
-  framePopupModal.classList.toggle('hidden');
-  btnToolFrame.classList.toggle('active', !framePopupModal.classList.contains('hidden'));
-  if (!framePopupModal.classList.contains('hidden')) {
-    renderFramePopupGrid();
-  }
-});
-
-btnCloseFramePopup?.addEventListener('click', () => {
-  framePopupModal.classList.add('hidden');
-  btnToolFrame.classList.remove('active');
-});
-
-btnGoToEditorFromFrame?.addEventListener('click', () => {
-  framePopupModal.classList.add('hidden');
-  btnToolFrame.classList.remove('active');
-  switchTab('editor');
-});
-
-function renderFramePopupGrid() {
-  if (!framePopupGrid) return;
-  framePopupGrid.innerHTML = FRAMES_CATALOG.map(f => `
-    <div class="popup-grid-item" data-src="${f.src}" data-id="${f.id}">
-      <img src="${f.src}" alt="${f.name}" />
-      <span>${f.name}</span>
-    </div>
-  `).join('');
-
-  framePopupGrid.querySelectorAll('.popup-grid-item').forEach(item => {
-    item.addEventListener('click', async (e) => {
-      const src = e.currentTarget.dataset.src;
-      const id = e.currentTarget.dataset.id;
-      const name = e.currentTarget.querySelector('span').textContent;
-      await addPreviewLayer({ type: 'frame', image: src, id: `frame-${id}`, name });
-      framePopupModal.classList.add('hidden');
-      btnToolFrame.classList.remove('active');
-    });
-  });
-}
-
-btnToolSticker?.addEventListener('click', () => {
-  framePopupModal.classList.add('hidden');
-  btnToolFrame.classList.remove('active');
-
-  stickerPopupModal.classList.toggle('hidden');
-  btnToolSticker.classList.toggle('active', !stickerPopupModal.classList.contains('hidden'));
-  if (!stickerPopupModal.classList.contains('hidden')) {
-    renderStickerPopupGrid();
-  }
-});
-
-btnCloseStickerPopup?.addEventListener('click', () => {
-  stickerPopupModal.classList.add('hidden');
-  btnToolSticker.classList.remove('active');
-});
-
-btnGoToEditorFromSticker?.addEventListener('click', () => {
-  stickerPopupModal.classList.add('hidden');
-  btnToolSticker.classList.remove('active');
-  switchTab('editor');
-});
-
-function renderStickerPopupGrid() {
-  if (!stickerPopupGrid) return;
-  stickerPopupGrid.innerHTML = STICKERS_CATALOG.map(s => `
-    <div class="popup-grid-item" data-src="${s.src}" data-id="${s.id}">
-      <img src="${s.src}" alt="${s.name}" />
-      <span>${s.name}</span>
-    </div>
-  `).join('');
-
-  stickerPopupGrid.querySelectorAll('.popup-grid-item').forEach(item => {
-    item.addEventListener('click', async (e) => {
-      const src = e.currentTarget.dataset.src;
-      const id = e.currentTarget.dataset.id;
-      const name = e.currentTarget.querySelector('span').textContent;
-      const cw = camPreviewCanvas.width || 640;
-      const ch = camPreviewCanvas.height || 480;
-      await addPreviewLayer({
-        type: 'sticker',
-        image: src,
-        id: `sticker-${id}-${Date.now().toString().substring(8)}`,
-        name,
-        x: cw / 2 + (Math.random() - 0.5) * 100,
-        y: ch / 2 + (Math.random() - 0.5) * 80
-      });
-      stickerPopupModal.classList.add('hidden');
-      btnToolSticker.classList.remove('active');
-    });
-  });
-}
-
-// --- Camera Preview Layer Management ---
-async function addPreviewLayer(layerData) {
-  const img = new Image();
-  img.crossOrigin = 'anonymous';
-  await new Promise((resolve, reject) => {
-    img.onload = resolve;
-    img.onerror = reject;
-    img.src = typeof layerData.image === 'string' ? layerData.image : layerData.image.src;
-  });
-
-  const cw = camPreviewCanvas.width || 640;
-  const ch = camPreviewCanvas.height || 480;
-  const defaultW = layerData.type === 'frame' ? cw : Math.min(img.width, 150);
-  const defaultH = layerData.type === 'frame' ? ch : Math.min(img.height, 150);
-
-  const layer = {
-    id: layerData.id,
-    type: layerData.type,
-    name: layerData.name || layerData.id,
-    src: typeof layerData.image === 'string' ? layerData.image : img.src,
-    image: img,
-    x: layerData.x ?? cw / 2,
-    y: layerData.y ?? ch / 2,
-    width: defaultW,
-    height: defaultH,
-    rotation: 0,
-    scale: 1,
-    opacity: 1
-  };
-
-  if (layer.type === 'frame') {
-    const idx = camPreviewLayers.findIndex(l => l.type === 'frame');
-    if (idx >= 0) camPreviewLayers[idx] = layer;
-    else camPreviewLayers.push(layer);
-  } else {
-    camPreviewLayers.push(layer);
-  }
-}
-
-function removePreviewLayer(id) {
-  camPreviewLayers = camPreviewLayers.filter(l => l.id !== id);
-}
-
-function clearPreviewLayers() {
-  camPreviewLayers = [];
-}
-
-// Preview rendering loop
-function startCamPreviewLoop() {
-  if (camPreviewRAF) return;
-  function loop() {
-    renderCamPreview();
-    camPreviewRAF = requestAnimationFrame(loop);
-  }
-  camPreviewRAF = requestAnimationFrame(loop);
-}
-
-function stopCamPreviewLoop() {
-  if (camPreviewRAF) {
-    cancelAnimationFrame(camPreviewRAF);
-    camPreviewRAF = null;
-  }
-}
-
-function renderCamPreview() {
-  if (!camPreviewCanvas) return;
-  const pctx = camPreviewCanvas.getContext('2d');
-  pctx.clearRect(0, 0, camPreviewCanvas.width, camPreviewCanvas.height);
-
-  if (camPreviewLayers.length === 0) return;
-
-  const stickers = camPreviewLayers.filter(l => l.type === 'sticker');
-  const frames = camPreviewLayers.filter(l => l.type === 'frame');
-  const ordered = [...stickers, ...frames];
-
-  ordered.forEach(layer => {
-    if (!layer.image) return;
-    pctx.save();
-    pctx.globalAlpha = layer.opacity ?? 1;
-    pctx.translate(layer.x, layer.y);
-    if (layer.rotation) pctx.rotate((layer.rotation * Math.PI) / 180);
-    const s = layer.scale || 1;
-    pctx.scale(s, s);
-    const w = layer.width;
-    const h = layer.height;
-    pctx.drawImage(layer.image, -w / 2, -h / 2, w, h);
-    pctx.restore();
-  });
-}
-
-// Sync preview canvas size with video
-if (previewBox && camPreviewCanvas) {
-  const resizeObs = new ResizeObserver(() => {
-    const rect = previewBox.getBoundingClientRect();
-    camPreviewCanvas.width = rect.width;
-    camPreviewCanvas.height = rect.height;
-  });
-  resizeObs.observe(previewBox);
-}
-
-startCamPreviewLoop();
-
 /**
  * Camera Actions (Updated with Realtime Filters, Timer, & Burst Mode)
  */
@@ -1155,6 +1082,7 @@ async function handleStartCamera() {
   try {
     await initCamera(videoElement);
     updateMirrorState();
+    usingCssZoom = true; // กล้องคนละตัวรองรับซูมฮาร์ดแวร์ไม่เหมือนกัน ต้องเริ่มใหม่
     applyLiveStreamFilters();
     updateStatus(true, `พร้อมใช้งาน (${getFacingMode() === 'user' ? 'กล้องหน้า' : 'กล้องหลัง'})`);
   } catch (error) {
@@ -1175,6 +1103,7 @@ async function handleSwitchCamera() {
   try {
     await switchCamera(videoElement);
     updateMirrorState();
+    usingCssZoom = true;
     applyLiveStreamFilters();
     updateStatus(true, `พร้อมใช้งาน (${getFacingMode() === 'user' ? 'กล้องหน้า' : 'กล้องหลัง'})`);
   } catch (error) {
@@ -1188,22 +1117,25 @@ async function handleSwitchCamera() {
  * Captures a single frame from video with filters and returns an offscreen canvas.
  */
 function captureSingleFrame(filterOptions) {
-  const vw = videoElement.videoWidth || 1280;
-  const vh = videoElement.videoHeight || 720;
+  // ครอปให้ตรงกับที่เห็นบนพรีวิว (อัตราส่วน + ซูม) เหมือนโหมดถ่ายเดี่ยว
+  const crop = filterOptions.crop || getCaptureCrop();
+  const w = crop.sw;
+  const h = crop.sh;
+
   const offscreen = document.createElement('canvas');
-  offscreen.width = vw;
-  offscreen.height = vh;
+  offscreen.width = w;
+  offscreen.height = h;
   const offCtx = offscreen.getContext('2d');
 
   const isMirrored = videoElement.classList.contains('mirror');
   if (isMirrored) {
-    offCtx.translate(vw, 0);
+    offCtx.translate(w, 0);
     offCtx.scale(-1, 1);
   }
   if (filterOptions.filter && filterOptions.filter !== 'none') {
     offCtx.filter = filterOptions.filter;
   }
-  offCtx.drawImage(videoElement, 0, 0, vw, vh);
+  offCtx.drawImage(videoElement, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, w, h);
   return offscreen;
 }
 
@@ -1262,39 +1194,14 @@ function composeBurstGrid(frames) {
   return composite;
 }
 
-/**
- * After capture, transfer preview layers to canvasEngine and switch to editor.
- */
-async function transferPreviewLayersToEditor() {
-  setTargetCanvas(canvasElement);
-
-  for (const pl of camPreviewLayers) {
-    await addLayer({
-      type: pl.type,
-      image: pl.src,
-      id: pl.id,
-      x: undefined,
-      y: undefined,
-      scale: pl.scale,
-      rotation: pl.rotation
-    });
-  }
-  clearPreviewLayers();
-  refreshLayerListUI();
-}
-
 async function handleCapture() {
   hideError();
   btnCapture.disabled = true;
-  framePopupModal.classList.add('hidden');
-  stickerPopupModal.classList.add('hidden');
-  btnToolFrame.classList.remove('active');
-  btnToolSticker.classList.remove('active');
 
+  // อบเฉพาะความสว่าง (ถือเป็นการตั้งค่ากล้อง) ส่วนฟิลเตอร์เก็บไว้เป็นคุณสมบัติของ layer
+  // จะได้เปลี่ยนฟิลเตอร์ทีหลังในหน้าตกแต่งได้โดยไม่ซ้อนกันสองชั้น
   const filterCss = FILTERS_CATALOG[activeFilterIndex].css;
-  const filterOptions = {
-    filter: filterCss === 'none' ? `brightness(${activeBrightness})` : `${filterCss} brightness(${activeBrightness})`
-  };
+  const filterOptions = { filter: `brightness(${activeBrightness})` };
 
   try {
     if (activeBurstCount <= 1) {
@@ -1310,8 +1217,10 @@ async function handleCapture() {
           else countdownNumber.textContent = '📸';
         },
         async () => {
-          await captureFrame(videoElement, filterOptions);
-          await transferPreviewLayersToEditor();
+          await captureFrame(videoElement, { ...filterOptions, crop: getCaptureCrop() });
+          updateLayer('base-layer', { filter: filterCss });
+          activeEditorFilter = filterCss;
+          renderEditorFilterRow();
 
           setTimeout(() => {
             countdownOverlay.classList.remove('active');
@@ -1365,9 +1274,9 @@ async function handleCapture() {
       // Set target canvas & inject composite grid as base layer in editor
       setTargetCanvas(canvasElement);
       setBaseLayerImage(compositeCanvas);
-
-      // Transfer any active stickers/frames
-      await transferPreviewLayersToEditor();
+      updateLayer('base-layer', { filter: filterCss });
+      activeEditorFilter = filterCss;
+      renderEditorFilterRow();
 
       setTimeout(() => {
         countdownOverlay.classList.remove('active');
@@ -1447,6 +1356,129 @@ async function inspectFrameCenter(blob) {
   };
 }
 
+/**
+ * --- ตัวเลือกช่องเอง (คลิกชี้ช่องที่จะเจาะ) ---
+ * ใช้เมื่อระบบตรวจหาช่องอัตโนมัติไม่เจอ หรือผู้ใช้อยากแก้เอง
+ */
+let cutoutState = null;
+
+function drawCutoutPreview() {
+  if (!cutoutState) return;
+  const { w, h, imageData, workCtx, work } = cutoutState;
+  workCtx.putImageData(imageData, 0, 0);
+
+  const g = frameCutoutCanvas.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  const c1 = css.getPropertyValue('--surface').trim() || '#ffffff';
+  const c2 = css.getPropertyValue('--surface-sunken').trim() || '#eeeeee';
+
+  // พื้นตารางให้เห็นชัดว่าตรงไหนโปร่งแล้ว
+  const S = 12;
+  for (let y = 0; y < h; y += S) {
+    for (let x = 0; x < w; x += S) {
+      g.fillStyle = ((x / S + y / S) % 2 === 0) ? c1 : c2;
+      g.fillRect(x, y, S, S);
+    }
+  }
+  g.drawImage(work, 0, 0);
+}
+
+async function openCutoutPicker(source) {
+  if (!source) return null;
+  const { canvas, ctx, w, h } = await loadFrameCanvas(source);
+  const imageData = ctx.getImageData(0, 0, w, h);
+
+  cutoutState = {
+    work: canvas,
+    workCtx: ctx,
+    w,
+    h,
+    imageData,
+    original: new Uint8ClampedArray(imageData.data),
+    resolve: null
+  };
+
+  frameCutoutCanvas.width = w;
+  frameCutoutCanvas.height = h;
+  drawCutoutPreview();
+  frameCutoutModal.classList.remove('hidden');
+
+  return new Promise((resolve) => { cutoutState.resolve = resolve; });
+}
+
+function closeCutoutPicker(result) {
+  frameCutoutModal.classList.add('hidden');
+  const done = cutoutState && cutoutState.resolve;
+  cutoutState = null;
+  if (done) done(result);
+}
+
+frameCutoutCanvas?.addEventListener('click', (e) => {
+  if (!cutoutState) return;
+  const { w, h, imageData } = cutoutState;
+
+  // แปลงพิกัดคลิกเป็นพิกัด canvas แบบเดียวกับ getCanvasCoordinates ใน canvasEngine
+  const rect = frameCutoutCanvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - rect.left) * (w / rect.width));
+  const y = Math.floor((e.clientY - rect.top) * (h / rect.height));
+  if (x < 0 || y < 0 || x >= w || y >= h) return;
+
+  const idx = y * w + x;
+  if (imageData.data[idx * 4 + 3] === 0) return; // ตรงนี้โปร่งอยู่แล้ว
+
+  const base = parseInt(cutoutTolerance.value, 10) || 30;
+
+  // กันรั่ว: ถ้าบริเวณที่ได้ไหลจนแตะขอบภาพและกินพื้นที่มาก แปลว่าหลุดออกนอกช่องไปแล้ว
+  // จึงไล่ลด tolerance ลงจนกว่าจะได้บริเวณที่อยู่ในช่องจริง (ตรรกะเดียวกับตัวตรวจอัตโนมัติ)
+  let region = floodFillRegion(imageData.data, w, h, idx, base);
+  for (const factor of [0.7, 0.5, 0.35, 0.25]) {
+    if (!(region.touchesEdge && region.area / (w * h) > 0.3)) break;
+    region = floodFillRegion(imageData.data, w, h, idx, base * factor);
+  }
+
+  for (const p of region.pixels) imageData.data[p * 4 + 3] = 0;
+  drawCutoutPreview();
+});
+
+cutoutTolerance?.addEventListener('input', (e) => {
+  cutoutToleranceValue.textContent = e.target.value;
+});
+
+btnCutoutReset?.addEventListener('click', () => {
+  if (!cutoutState) return;
+  cutoutState.imageData.data.set(cutoutState.original);
+  drawCutoutPreview();
+});
+
+btnCutoutCancel?.addEventListener('click', () => closeCutoutPicker(null));
+btnCloseCutoutModal?.addEventListener('click', () => closeCutoutPicker(null));
+
+btnCutoutApply?.addEventListener('click', async () => {
+  if (!cutoutState) return closeCutoutPicker(null);
+  const { work, workCtx, imageData } = cutoutState;
+  workCtx.putImageData(imageData, 0, 0);
+  const blob = await new Promise((resolve) => work.toBlob(resolve, 'image/png'));
+  closeCutoutPicker(blob);
+});
+
+// เจาะเองกับกรอบที่อัปโหลดล่าสุด
+btnManualCutout?.addEventListener('click', async () => {
+  if (!lastUploadedFrameBlob) return;
+  const blob = await openCutoutPicker(lastUploadedFrameBlob);
+  if (!blob) return;
+
+  hideError();
+  lastUploadedFrameBlob = blob;
+  lastUploadedFrameUrl = URL.createObjectURL(blob);
+  await addLayer({
+    type: 'frame',
+    image: lastUploadedFrameUrl,
+    id: `custom-frame-${Date.now()}`
+  });
+  refreshLayerListUI();
+  updateStatus(true, 'อัปเดตกรอบตามช่องที่เลือกแล้ว');
+});
+
 async function handleFrameUpload(e) {
   const file = e.target.files?.[0];
   e.target.value = '';
@@ -1461,31 +1493,38 @@ async function handleFrameUpload(e) {
     if (before.isOpaque) {
       const wantsCutout = confirm(
         'ภาพนี้ทึบทั้งใบ ถ้าใช้เป็นกรอบจะบังรูปถ่ายทั้งหมด\n\n' +
-        'ต้องการให้ตัดพื้นที่ตรงกลางให้โปร่งใสไหม?'
+        'ต้องการให้เจาะช่องใส่รูปให้โปร่งใสไหม?'
       );
 
       if (wantsCutout) {
+        let needManual = false;
         try {
-          updateProgress(10, 'กำลังตัดพื้นที่ตรงกลางของกรอบ...');
-          // โหมด color_key ปกติสุ่มสีจาก "มุมบน" ซึ่งบนภาพกรอบคือตัวลายกรอบ
-          // จึงส่งสีที่วัดจากกลางภาพเข้าไปเป็น targetBgColor เพื่อให้ตัดถูกที่
-          const processed = await removeBackground(file, {
-            mode: 'color_key',
-            targetBgColor: before.color,
-            threshold: 80,
-            feather: 30,
-            onProgress: ({ progress, message }) => updateProgress(progress, message),
-            onError: (err) => showError(`ตัดพื้นที่ตรงกลางขัดข้อง: ${err.message}`)
+          updateProgress(10, 'กำลังตรวจหาช่องใส่รูป...');
+          // หว่าน probe ทั่วภาพแล้วคัดเฉพาะบริเวณที่เป็นช่องใส่รูป
+          // (ของเดิมหว่าน seed ที่กลางภาพจุดเดียว จึงพังกับกรอบหลายช่อง
+          //  เพราะกลางภาพมักตกบนเส้นคั่นระหว่างช่อง แล้วไหลไปกินพื้นหลังกรอบแทน)
+          const { blob: processed, removedRatio, slotCount } = await cutoutFrameSlots(file, {
+            onProgress: ({ progress, message }) => updateProgress(progress, message)
           });
 
-          const after = await inspectFrameCenter(processed);
-          if (after.isOpaque) {
-            showError('ตัดพื้นที่ตรงกลางไม่สำเร็จ (สีตรงกลางไม่สม่ำเสมอพอ) จึงใช้ภาพต้นฉบับแทน — แนะนำอัปโหลดเป็น PNG ที่เจาะกลางโปร่งใสมาแล้ว');
+          if (slotCount === 0) {
+            // ต้องเช็ค slotCount ตรง ๆ ไม่ใช่ดูแค่ removedRatio
+            // เพราะเคสกรอบหลายช่องเคยได้ ratio ที่ดูปกติแต่ผลผิดสิ้นเชิง
+            needManual = true;
+          } else if (removedRatio > 0.9) {
+            showError('กรอบนี้เจาะแล้วแทบไม่เหลือลายกรอบ จึงใช้ภาพต้นฉบับแทน — ลองกด "✂️ เจาะช่องเอง" เพื่อชี้ช่องที่ต้องการ');
           } else {
             finalBlob = processed;
+            updateStatus(true, `เจาะช่องใส่รูปได้ ${slotCount} ช่อง`);
           }
         } finally {
           setTimeout(hideProgress, 1200);
+        }
+
+        if (needManual) {
+          showError('ตรวจหาช่องใส่รูปอัตโนมัติไม่เจอ — คลิกชี้ช่องที่ต้องการเจาะเองได้เลย');
+          const manual = await openCutoutPicker(file);
+          if (manual) finalBlob = manual;
         }
       }
     }
@@ -1503,7 +1542,7 @@ async function handleFrameUpload(e) {
     id: `custom-frame-${Date.now()}`
   });
 
-  btnSaveCustomFrame.classList.remove('hidden');
+  frameActions.classList.remove('hidden');
   refreshLayerListUI();
 }
 
@@ -1534,7 +1573,7 @@ btnSaveCustomFrame.addEventListener('click', async () => {
   renderFrameGallery();
 
   alert(`🎉 บันทึกกรอบ "${frameName}" เรียบร้อยแล้ว! เลือกใช้ได้จากแถบ 🖼️ กรอบรูป`);
-  btnSaveCustomFrame.classList.add('hidden');
+  frameActions.classList.add('hidden');
 });
 
 /**
@@ -1900,6 +1939,7 @@ function renderSessionGallery() {
         <span class="photo-time">⏰ ${p.timestamp}</span>
         <button class="btn btn-primary btn-sm btn-edit-photo" data-id="${p.id}">🎨 แก้ไข</button>
         <a class="btn btn-secondary btn-sm" href="${p.dataUrl}" download="snapframe-${p.id}.png">📥 ดาวน์โหลด</a>
+        <button class="btn btn-danger btn-sm btn-del-photo" data-id="${p.id}" title="ลบภาพนี้">🗑️</button>
       </div>
     `;
     sessionGalleryGrid.appendChild(card);
@@ -1911,6 +1951,16 @@ function renderSessionGallery() {
       const photoId = e.target.dataset.id;
       const photo = photos.find(p => p.id === photoId);
       if (photo) loadPhotoToEditor(photo.dataUrl);
+    });
+  });
+
+  // ลบภาพในคลังเซสชัน (appUI.removeSessionPhoto มีอยู่แล้วแต่ไม่เคยถูกเรียก)
+  document.querySelectorAll('.btn-del-photo').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const photoId = e.currentTarget.dataset.id;
+      if (!confirm('ลบภาพนี้ออกจากคลังเซสชัน?')) return;
+      appUI.removeSessionPhoto(photoId);
+      renderSessionGallery();
     });
   });
 }
@@ -1929,8 +1979,6 @@ async function loadPhotoToEditor(dataUrl) {
     });
 
     setTargetCanvas(canvasElement);
-    canvasElement.width = img.width;
-    canvasElement.height = img.height;
 
     // Create offscreen canvas for base layer
     const offscreen = document.createElement('canvas');
@@ -1938,15 +1986,11 @@ async function loadPhotoToEditor(dataUrl) {
     offscreen.height = img.height;
     offscreen.getContext('2d').drawImage(img, 0, 0);
 
-    // Inject as base layer
-    await captureFrame(videoElement, {});
-    updateLayer('base-layer', {
-      image: offscreen,
-      width: img.width,
-      height: img.height,
-      x: img.width / 2,
-      y: img.height / 2
-    });
+    // setBaseLayerImage ปรับขนาด canvas ให้ตรงกับภาพให้เอง
+    // (ของเดิมเรียก captureFrame() ซึ่งไปตั้งขนาด canvas เป็นขนาดวิดีโอ ไม่ใช่ขนาดภาพ)
+    setBaseLayerImage(offscreen);
+    activeEditorFilter = 'none';
+    renderEditorFilterRow();
 
     refreshLayerListUI();
     switchTab('editor');
@@ -1960,7 +2004,15 @@ async function loadPhotoToEditor(dataUrl) {
 btnStopCamera?.addEventListener('click', handleStopCamera);
 btnSwitch?.addEventListener('click', handleSwitchCamera);
 btnCapture?.addEventListener('click', handleCapture);
-btnRetake?.addEventListener('click', () => switchTab('camera'));
+btnRetake?.addEventListener('click', () => {
+  // ล้างสติกเกอร์ของช็อตที่แล้ว แต่คงกรอบไว้ (กรอบมักเป็นธีมของงานที่ใช้ซ้ำทุกช็อต)
+  // ของเดิมแค่สลับแท็บ สติกเกอร์เก่าจึงค้างติดไปกับภาพใหม่
+  getLayers()
+    .filter(l => l.type === 'sticker')
+    .forEach(l => removeLayer(l.id));
+  refreshLayerListUI();
+  switchTab('camera');
+});
 
 btnExport?.addEventListener('click', () => {
   downloadImage('snapframe-photo.png', 'image/png');

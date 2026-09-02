@@ -17,6 +17,49 @@ let activeAction = null; // 'drag' | 'rotate' | 'scale' | null
 let dragStart = { x: 0, y: 0 };
 let layerInitialState = null;
 let onSelectionChangeCallback = null;
+let onCanvasResizeCallback = null;
+
+/**
+ * ตั้งขนาด canvas แล้วแจ้งผู้เรียก (ใช้ปรับกล่องแสดงผลให้ยืดตามภาพจริง)
+ */
+function resizeCanvas(width, height) {
+  if (!targetCanvas) return;
+  const w = Math.max(1, Math.round(width));
+  const h = Math.max(1, Math.round(height));
+  if (targetCanvas.width === w && targetCanvas.height === h) return;
+
+  targetCanvas.width = w;
+  targetCanvas.height = h;
+  if (typeof onCanvasResizeCallback === 'function') onCanvasResizeCallback(w, h);
+}
+
+/**
+ * ปรับ base layer ให้ "คลุมเต็ม" canvas โดยคงสัดส่วนรูปเดิม (แบบ object-fit: cover)
+ * ส่วนที่ล้นออกนอก canvas จะถูกตัดเองตอนวาด
+ */
+function refitBaseLayer() {
+  if (!targetCanvas) return;
+  const base = layers.find(l => l.type === 'base');
+  if (!base || !base.image) return;
+
+  const iw = base.image.naturalWidth || base.image.width;
+  const ih = base.image.naturalHeight || base.image.height;
+  if (!iw || !ih) return;
+
+  const scale = Math.max(targetCanvas.width / iw, targetCanvas.height / ih);
+  base.width = iw * scale;
+  base.height = ih * scale;
+  base.x = targetCanvas.width / 2;
+  base.y = targetCanvas.height / 2;
+  base.scale = 1;
+}
+
+/**
+ * เรียกทุกครั้งที่ขนาด canvas เปลี่ยน
+ */
+export function setOnCanvasResize(callback) {
+  onCanvasResizeCallback = callback;
+}
 
 // Handle sizes
 const HANDLE_SIZE = 12; // รัศมีขั้นต่ำของจุดจับ (หน่วยพิกเซลของ canvas)
@@ -157,13 +200,16 @@ export async function captureFrame(videoEl, options = {}) {
     throw new Error('กรุณาระบุ <video> element ที่มี video stream สำหรับถ่ายภาพ');
   }
 
-  const width = videoEl.videoWidth || targetCanvas?.width || 1280;
-  const height = videoEl.videoHeight || targetCanvas?.height || 720;
+  const vw = videoEl.videoWidth || targetCanvas?.width || 1280;
+  const vh = videoEl.videoHeight || targetCanvas?.height || 720;
 
-  if (targetCanvas) {
-    targetCanvas.width = width;
-    targetCanvas.height = height;
-  }
+  // options.crop = พื้นที่ของวิดีโอที่มองเห็นจริงบนพรีวิว (อัตราส่วน + ซูม)
+  // ถ้าไม่ส่งมาให้เก็บเฟรมเต็มเหมือนเดิม
+  const crop = options.crop || { sx: 0, sy: 0, sw: vw, sh: vh };
+  const width = Math.max(1, Math.round(crop.sw));
+  const height = Math.max(1, Math.round(crop.sh));
+
+  resizeCanvas(width, height);
 
   const offscreen = document.createElement('canvas');
   offscreen.width = width;
@@ -181,7 +227,7 @@ export async function captureFrame(videoEl, options = {}) {
     offCtx.filter = options.filter;
   }
 
-  offCtx.drawImage(videoEl, 0, 0, width, height);
+  offCtx.drawImage(videoEl, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height);
 
   const baseLayer = {
     id: 'base-layer',
@@ -222,10 +268,7 @@ export function setBaseLayerImage(imageOrCanvas) {
   const width = imageOrCanvas.width || (targetCanvas ? targetCanvas.width : 1280);
   const height = imageOrCanvas.height || (targetCanvas ? targetCanvas.height : 720);
 
-  if (targetCanvas) {
-    targetCanvas.width = width;
-    targetCanvas.height = height;
-  }
+  resizeCanvas(width, height);
 
   const baseLayer = {
     id: 'base-layer',
@@ -266,6 +309,8 @@ export async function addLayer(layerData) {
   const imageSrc = layerData.image || layerData.src || layerData.url;
   const loadedImg = await loadImage(imageSrc);
 
+  // รูปที่ถ่ายเป็นตัวกำหนดสัดส่วนงาน กรอบจะถูกยืดให้เต็ม canvas ตามไปเอง
+  // (layer ชนิด frame ใช้ width/height เท่าขนาด canvas ด้านล่างนี้)
   const canvasWidth = targetCanvas ? targetCanvas.width : 1280;
   const canvasHeight = targetCanvas ? targetCanvas.height : 720;
 
@@ -382,6 +427,11 @@ export function renderCanvas() {
       ctx.scale(-finalScaleX, finalScaleY);
     } else {
       ctx.scale(finalScaleX, finalScaleY);
+    }
+
+    // ฟิลเตอร์เก็บเป็นคุณสมบัติของ layer แทนการอบติดพิกเซลตอนถ่าย จะได้เปลี่ยนทีหลังได้
+    if (layer.filter && layer.filter !== 'none') {
+      ctx.filter = layer.filter;
     }
 
     const drawW = layer.width;
@@ -737,8 +787,8 @@ export async function loadTemplateDesign(templateDesignData) {
   }
 
   if (data.canvas && targetCanvas) {
-    targetCanvas.width = data.canvas.width || 1280;
-    targetCanvas.height = data.canvas.height || 720;
+    resizeCanvas(data.canvas.width || 1280, data.canvas.height || 720);
+    refitBaseLayer();
   }
 
   // Clear existing non-base layers or all layers

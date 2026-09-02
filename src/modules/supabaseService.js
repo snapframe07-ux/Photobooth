@@ -351,6 +351,58 @@ export class SupabaseService {
     return data;
   }
 
+  /**
+   * ลบกรอบของตัวเอง (แถวใน DB + ไฟล์ใน storage)
+   * ไฟล์จะถูกลบได้ก็ต่อเมื่อมี policy DELETE ของ storage แล้ว (ดู supabase_frames.sql)
+   */
+  async deleteFrame(frameId) {
+    const user = await this.getCurrentUser();
+    if (!user) throw new Error('กรุณาเข้าสู่ระบบก่อน');
+
+    const { data: row } = await supabase
+      .from('frames')
+      .select('image_url')
+      .eq('frame_id', frameId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    const { error } = await supabase
+      .from('frames')
+      .delete()
+      .eq('frame_id', frameId)
+      .eq('user_id', user.id);
+
+    if (error) {
+      throw handleSupabaseError(error, 'ไม่สามารถลบกรอบได้');
+    }
+
+    await removeStorageObject('frames', row && row.image_url);
+  }
+
+  async deleteSticker(stickerId) {
+    const user = await this.getCurrentUser();
+    if (!user) throw new Error('กรุณาเข้าสู่ระบบก่อน');
+
+    const { data: row } = await supabase
+      .from('stickers')
+      .select('image_url')
+      .eq('sticker_id', stickerId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    const { error } = await supabase
+      .from('stickers')
+      .delete()
+      .eq('sticker_id', stickerId)
+      .eq('user_id', user.id);
+
+    if (error) {
+      throw handleSupabaseError(error, 'ไม่สามารถลบสติกเกอร์ได้');
+    }
+
+    await removeStorageObject('stickers', row && row.image_url);
+  }
+
   async getFrames() {
     if (!isSupabaseConfigured) return [];
 
@@ -363,6 +415,24 @@ export class SupabaseService {
       throw handleSupabaseError(error, 'ดึงข้อมูลกรอบรูปขัดข้อง');
     }
     return data || [];
+  }
+}
+
+/**
+ * ลบไฟล์ใน storage จาก public URL — ถ้าไม่มี policy DELETE ก็แค่ข้ามไป
+ * (แถวใน DB ถูกลบไปแล้ว ไฟล์ที่เหลือเป็นแค่ขยะ ไม่ควรทำให้ UI ค้าง)
+ */
+async function removeStorageObject(bucket, publicUrl) {
+  if (!publicUrl || typeof publicUrl !== 'string') return;
+  const marker = `/storage/v1/object/public/${bucket}/`;
+  const at = publicUrl.indexOf(marker);
+  if (at === -1) return;
+
+  const path = decodeURIComponent(publicUrl.slice(at + marker.length));
+  try {
+    await supabase.storage.from(bucket).remove([path]);
+  } catch (err) {
+    console.warn(`ลบไฟล์ใน bucket ${bucket} ไม่สำเร็จ:`, err.message);
   }
 }
 

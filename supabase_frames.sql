@@ -53,3 +53,19 @@ DROP POLICY IF EXISTS "Authenticated user frame upload" ON storage.objects;
 CREATE POLICY "Authenticated user frame upload"
   ON storage.objects FOR INSERT
   WITH CHECK (bucket_id = 'frames' AND auth.role() = 'authenticated');
+
+-- Delete: ต้องมี policy นี้ ไฟล์ใน bucket ถึงจะถูกลบตอนผู้ใช้กดลบกรอบ
+-- ถ้าไม่มี จะลบได้แค่แถวใน DB ส่วนไฟล์จะค้างเป็นขยะใน bucket
+DROP POLICY IF EXISTS "Authenticated user frame delete" ON storage.objects;
+CREATE POLICY "Authenticated user frame delete"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'frames' AND auth.role() = 'authenticated');
+
+-- ========================================================
+-- หมายเหตุ: bucket 'stickers' (สร้างไว้ใน supabase_schema.sql) ก็ไม่มี policy DELETE
+-- ถ้าต้องการให้ลบไฟล์สติกเกอร์ได้จริงด้วย ให้รันเพิ่ม:
+--
+--   CREATE POLICY "Authenticated user sticker delete"
+--     ON storage.objects FOR DELETE
+--     USING (bucket_id = 'stickers' AND auth.role() = 'authenticated');
+-- ========================================================
