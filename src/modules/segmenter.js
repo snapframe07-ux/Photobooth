@@ -16,6 +16,9 @@ let initPromise = null;
 const WASM_CDN_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
 const MODEL_ASSET_PATH = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
 
+// ด้านยาวสุดที่ยอมประมวลผลตอนเจาะช่องกรอบ
+const MAX_CUTOUT_SIDE = 2048;
+
 /**
  * Initializes MediaPipe ImageSegmenter
  */
@@ -271,4 +274,253 @@ export async function removeBackground(imageFile, options = {}) {
     return await removeBackgroundHybrid(imageFile, options);
   }
   return await removeBackgroundAI(imageFile, options);
+}
+
+/**
+ * Flood fill 4 ทิศจากจุดเริ่ม เทียบสีกับ "สีของจุดเริ่ม" ที่ตรึงไว้
+ * (ไม่ใช้ค่าเฉลี่ยวิ่ง เพื่อไม่ให้ไหลข้ามโทนไปเรื่อย ๆ จนกินทั้งภาพ)
+ *
+ * @param {Uint8ClampedArray} px  ข้อมูลพิกเซล RGBA
+ * @param {number} w
+ * @param {number} h
+ * @param {number} startIdx  ดัชนีพิกเซล (ไม่ใช่ byte offset)
+ * @param {number} tolerance ระยะสี RGB ที่ยังถือว่าเป็นสีเดียวกัน
+ * @param {Uint8Array} [claimed] แผนที่พิกเซลที่ถูกจับกลุ่มไปแล้ว (กันซ้ำข้ามรอบ)
+ * @returns {{pixels: number[], area: number, minX: number, minY: number, maxX: number, maxY: number, touchesEdge: boolean}}
+ */
+export function floodFillRegion(px, w, h, startIdx, tolerance, claimed = null) {
+  const sI = startIdx * 4;
+  const sR = px[sI], sG = px[sI + 1], sB = px[sI + 2];
+
+  const seen = new Uint8Array(w * h);
+  const out = [];
+  const stack = [startIdx];
+  seen[startIdx] = 1;
+
+  let minX = w, minY = h, maxX = -1, maxY = -1, touchesEdge = false;
+
+  while (stack.length) {
+    const idx = stack.pop();
+    out.push(idx);
+
+    const x = idx % w;
+    const y = (idx - x) / w;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+    if (x === 0 || y === 0 || x === w - 1 || y === h - 1) touchesEdge = true;
+
+    const push = (nx, ny) => {
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
+      const n = ny * w + nx;
+      if (seen[n]) return;
+      if (claimed && claimed[n]) return;
+      const i = n * 4;
+      const d = Math.sqrt((px[i] - sR) ** 2 + (px[i + 1] - sG) ** 2 + (px[i + 2] - sB) ** 2);
+      if (d >= tolerance) return;
+      seen[n] = 1;
+      stack.push(n);
+    };
+
+    push(x - 1, y); push(x + 1, y); push(x, y - 1); push(x, y + 1);
+  }
+
+  return { pixels: out, area: out.length, minX, minY, maxX, maxY, touchesEdge };
+}
+
+/**
+ * โหลดภาพลง canvas พร้อมย่อด้านยาวสุดไม่เกิน MAX_CUTOUT_SIDE
+ * กรอบถูกยืดเป็นขนาด canvas อยู่แล้ว ย่อจึงไม่เสียคุณภาพ และกันหน่วยความจำบาน
+ */
+export async function loadFrameCanvas(imageFile) {
+  const img = await loadImageElementFromFile(imageFile);
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  if (!iw || !ih) throw new Error('ภาพไม่มีขนาด');
+
+  const k = Math.min(1, MAX_CUTOUT_SIDE / Math.max(iw, ih));
+  const w = Math.max(1, Math.round(iw * k));
+  const h = Math.max(1, Math.round(ih * k));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, w, h);
+  return { canvas, ctx, w, h };
+}
+
+/**
+ * ไล่ขอบของช่องที่เจาะไปแล้วให้เนียน (กันขอบหยัก)
+ *
+ * ต้องเทียบกับ "สีของช่อง" และ tolerance ที่ช่องนั้นใช้จริง แล้วจำกัดแถบไล่ให้แคบ
+ * ไม่งั้นจะไปกัดเนื้อกรอบที่ติดขอบช่องจนจาง (เช่นเส้นคั่นสีชมพูบาง ๆ ระหว่างช่อง)
+ */
+function featherSlotEdge(px, w, h, cut, region, tol, sR, sG, sB) {
+  const band = tol * 1.25;   // แถบไล่ขอบ: แค่พิกเซลที่เกือบจะถูกเจาะไปแล้ว
+
+  for (const p of region.pixels) {
+    const x = p % w;
+    const y = (p - x) / w;
+
+    const check = (nx, ny) => {
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) return;
+      const n = ny * w + nx;
+      if (cut[n]) return;
+      const i = n * 4;
+      if (px[i + 3] === 0) return;
+      const d = Math.sqrt((px[i] - sR) ** 2 + (px[i + 1] - sG) ** 2 + (px[i + 2] - sB) ** 2);
+      if (d < tol || d >= band) return;   // ในช่วง tol..band เท่านั้น
+      const factor = (d - tol) / (band - tol);
+      const next = Math.round(px[i + 3] * factor);
+      if (next < px[i + 3]) px[i + 3] = next;
+    };
+
+    check(x - 1, y); check(x + 1, y); check(x, y - 1); check(x, y + 1);
+  }
+}
+
+// เกณฑ์ตัดสินว่าบริเวณที่เจอ "เป็นช่องใส่รูป" หรือไม่
+/**
+ * probe ต้องอยู่บนพื้นที่สีเรียบ ไม่ใช่บนขอบรอยต่อ
+ *
+ * ถ้า seed ตกบนพิกเซล anti-alias ตรงขอบช่อง สีของมันจะใกล้ทั้งสีในช่องและสีพื้นกรอบ
+ * flood จึงรั่วข้ามขอบออกไปกินพื้นหลังทั้งผืน แล้วกลืนช่องนั้นหายไปด้วย
+ */
+function isFlatProbe(px, w, h, x, y, tolerance) {
+  const i0 = (y * w + x) * 4;
+  const r = px[i0], g = px[i0 + 1], b = px[i0 + 2];
+  const limit = tolerance / 3;
+
+  for (let dy = -2; dy <= 2; dy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) return false;
+      const i = (ny * w + nx) * 4;
+      const d = Math.sqrt((px[i] - r) ** 2 + (px[i + 1] - g) ** 2 + (px[i + 2] - b) ** 2);
+      if (d > limit) return false;
+    }
+  }
+  return true;
+}
+
+const SLOT_MIN_AREA_RATIO = 0.02;  // เล็กกว่านี้คือลายตกแต่ง
+const SLOT_MAX_AREA_RATIO = 0.85;  // ใหญ่กว่านี้คือไหลกินทั้งภาพ
+const SLOT_MIN_FILL_RATIO = 0.6;   // ช่องเป็นสี่เหลี่ยม/วงรี ไม่ใช่ลายกระจาย
+const PROBE_GRID = 9;              // หว่าน probe 9x9 ทั่วภาพ
+const PROBE_MARGIN = 0.06;
+
+// บางกรอบมีสีอ่อน ๆ เชื่อมจากในช่องออกไปพื้นหลัง ทำให้ flood รั่วออกไปทั้งผืน
+// จึงไล่ลด tolerance ลงเรื่อย ๆ จนกว่าจะได้บริเวณที่มีลักษณะเป็นช่องจริง
+const TOLERANCE_LADDER = [1, 0.7, 0.5, 0.35];
+
+function isSlotRegion(region, total) {
+  const areaRatio = region.area / total;
+  const boxArea = (region.maxX - region.minX + 1) * (region.maxY - region.minY + 1);
+  const fillRatio = boxArea > 0 ? region.area / boxArea : 0;
+  return (
+    !region.touchesEdge &&
+    areaRatio >= SLOT_MIN_AREA_RATIO &&
+    areaRatio <= SLOT_MAX_AREA_RATIO &&
+    fillRatio >= SLOT_MIN_FILL_RATIO
+  );
+}
+
+/**
+ * เจาะ "ช่องใส่รูป" ของกรอบ photobooth ให้โปร่งใส — รองรับหลายช่อง
+ *
+ * ของเดิม (cutoutCenterRegion) หว่าน seed ที่กลางภาพจุดเดียว จึงพังกับกรอบหลายช่อง
+ * เพราะจุดกึ่งกลางมักตกบนเส้นคั่นระหว่างช่อง แล้วไหลไปกินพื้นหลังกรอบแทน
+ *
+ * วิธีใหม่: หว่าน probe ทั่วภาพ แล้วคัดเฉพาะบริเวณที่มีลักษณะเป็นช่องใส่รูป
+ * (ไม่แตะขอบภาพ + ใหญ่พอ + รูปทรงเต็ม bounding box)
+ *
+ * @param {Blob|File} imageFile
+ * @param {Object} [options]
+ * @param {number} [options.tolerance=45]
+ * @param {Function} [options.onProgress]
+ * @returns {Promise<{blob: Blob, removedRatio: number, slotCount: number}>}
+ */
+export async function cutoutFrameSlots(imageFile, options = {}) {
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
+  const tolerance = options.tolerance || 45;
+
+  onProgress({ status: 'loading', progress: 15, message: 'กำลังอ่านไฟล์กรอบ...' });
+  const { canvas, ctx, w, h } = await loadFrameCanvas(imageFile);
+
+  onProgress({ status: 'processing', progress: 45, message: 'กำลังตรวจหาช่องใส่รูป...' });
+
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const px = imageData.data;
+  const total = w * h;
+
+  // เก็บ "สีของ region ที่เคยครอบพิกเซลนี้" ไว้ เพื่อข้าม probe ที่จะได้ผลซ้ำเดิม
+  // ใช้แทนการ mark claimed แบบตายตัว เพราะ region ที่ถูกปฏิเสธไม่ควรไปกันไม่ให้เจอช่องข้างใน
+  const regionSeed = new Int32Array(total);
+  const cut = new Uint8Array(total);      // พิกเซลที่จะเจาะจริง
+  const slots = [];                       // ช่องที่รับแล้ว เก็บสี+tolerance ไว้ใช้ไล่ขอบ
+  let removed = 0;
+  let slotCount = 0;
+
+  for (let gy = 0; gy < PROBE_GRID; gy++) {
+    for (let gx = 0; gx < PROBE_GRID; gx++) {
+      const fx = PROBE_MARGIN + (gx / (PROBE_GRID - 1)) * (1 - PROBE_MARGIN * 2);
+      const fy = PROBE_MARGIN + (gy / (PROBE_GRID - 1)) * (1 - PROBE_MARGIN * 2);
+      const x = Math.min(w - 1, Math.max(0, Math.round(fx * w)));
+      const y = Math.min(h - 1, Math.max(0, Math.round(fy * h)));
+      const idx = y * w + x;
+      const pi = idx * 4;
+
+      // ข้าม probe ที่ตกบนขอบรอยต่อ ไม่งั้น flood จะรั่วข้ามขอบ
+      if (!isFlatProbe(px, w, h, x, y, tolerance)) continue;
+
+      // ข้าม probe ที่จะได้ region เดิมกับที่เคยตรวจไปแล้ว
+      const packed = regionSeed[idx];
+      if (packed !== 0) {
+        const pr = (packed >> 16) & 255, pg = (packed >> 8) & 255, pb = packed & 255;
+        const d = Math.sqrt((px[pi] - pr) ** 2 + (px[pi + 1] - pg) ** 2 + (px[pi + 2] - pb) ** 2);
+        if (d < tolerance) continue;
+      }
+
+      const seedPacked = (1 << 24) | (px[pi] << 16) | (px[pi + 1] << 8) | px[pi + 2];
+
+      let accepted = null;
+      let acceptedTol = tolerance;
+      let widest = null;
+      for (const factor of TOLERANCE_LADDER) {
+        const tol = tolerance * factor;
+        const region = floodFillRegion(px, w, h, idx, tol);
+        if (!widest) widest = region;
+
+        if (isSlotRegion(region, total)) { accepted = region; acceptedTol = tol; break; }
+
+        // เล็กเกินไป = เป็นลายตกแต่ง ลด tolerance ลงอีกก็ยิ่งเล็ก ไม่ต้องไล่ต่อ
+        if (region.area / total < SLOT_MIN_AREA_RATIO) break;
+      }
+
+      // จองพื้นที่ไว้กัน probe อื่นมาทำซ้ำ (ใช้ผลที่กว้างที่สุดเพื่อครอบให้ทั่ว)
+      for (const p of widest.pixels) regionSeed[p] = seedPacked;
+
+      if (!accepted) continue;
+
+      slotCount++;
+      slots.push({ region: accepted, tol: acceptedTol, sR: px[pi], sG: px[pi + 1], sB: px[pi + 2] });
+      for (const p of accepted.pixels) {
+        if (cut[p]) continue;
+        cut[p] = 1;
+        px[p * 4 + 3] = 0;
+        removed++;
+      }
+    }
+  }
+
+  onProgress({ status: 'feathering', progress: 80, message: 'กำลังไล่ขอบให้เนียน...' });
+  for (const s of slots) featherSlotEdge(px, w, h, cut, s.region, s.tol, s.sR, s.sG, s.sB);
+
+  ctx.putImageData(imageData, 0, 0);
+  onProgress({ status: 'complete', progress: 100, message: `เจาะช่องใส่รูปได้ ${slotCount} ช่อง` });
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+  return { blob: blob || imageFile, removedRatio: total ? removed / total : 0, slotCount };
 }
