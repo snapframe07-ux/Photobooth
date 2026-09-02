@@ -2004,7 +2004,15 @@ async function loadPhotoToEditor(dataUrl) {
 btnStopCamera?.addEventListener('click', handleStopCamera);
 btnSwitch?.addEventListener('click', handleSwitchCamera);
 btnCapture?.addEventListener('click', handleCapture);
-btnRetake?.addEventListener('click', () => switchTab('camera'));
+btnRetake?.addEventListener('click', () => {
+  // ล้างสติกเกอร์ของช็อตที่แล้ว แต่คงกรอบไว้ (กรอบมักเป็นธีมของงานที่ใช้ซ้ำทุกช็อต)
+  // ของเดิมแค่สลับแท็บ สติกเกอร์เก่าจึงค้างติดไปกับภาพใหม่
+  getLayers()
+    .filter(l => l.type === 'sticker')
+    .forEach(l => removeLayer(l.id));
+  refreshLayerListUI();
+  switchTab('camera');
+});
 
 btnExport?.addEventListener('click', () => {
   downloadImage('snapframe-photo.png', 'image/png');
