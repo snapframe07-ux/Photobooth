@@ -1,4 +1,6 @@
 import './style.css';
+import { composePhotoStrip, getStripLayout } from './modules/photoStrip.js';
+import { getFrameLayout } from './modules/frameSlots.js';
 
 // Modules
 import {
@@ -12,7 +14,6 @@ import {
 
 import {
   initCanvasEngine,
-  captureFrame,
   setBaseLayerImage,
   addLayer,
   removeLayer,
@@ -110,7 +111,10 @@ let activeZoom = 1.0;
 // ถ้าฮาร์ดแวร์รับงานแล้วยังใส่ CSS อีกจะกลายเป็นซูมซ้อนสองชั้น
 let usingCssZoom = true;
 let activeEditorFilter = 'none';   // ฟิลเตอร์ที่ใช้กับ base layer ในหน้าตกแต่ง
-let activeBurstCount = 1;
+let activeBurstCount = 4;
+let selectedStripFrame = FRAMES_CATALOG[0];
+let isCapturing = false;
+let hasChosenStrip = false;
 let isGridActive = false;
 let currentAspectRatio = '4:3';
 
@@ -126,7 +130,8 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
     <nav class="nav-tabs">
-      <button class="nav-btn active" id="tabCamera"><span class="nav-ico">📷</span><span class="nav-label">ถ่ายภาพ</span></button>
+      <button class="nav-btn active" id="tabSetup">🖼️ เลือกกรอบ</button>
+      <button class="nav-btn" id="tabCamera"><span class="nav-ico">📷</span><span class="nav-label">ถ่ายภาพ</span></button>
       <button class="nav-btn" id="tabEditor"><span class="nav-ico">🎨</span><span class="nav-label">ตกแต่ง</span></button>
       <button class="nav-btn" id="tabTemplateGallery"><span class="nav-ico">📁</span><span class="nav-label">เทมเพลต</span></button>
       <button class="nav-btn" id="tabGallery"><span class="nav-ico">🖼️</span><span class="nav-label">คลังภาพ (<span id="galleryCount">0</span>)</span></button>
@@ -148,9 +153,30 @@ document.querySelector('#app').innerHTML = `
     </div>
 
     <!-- View 1: Photobooth Studio Camera View (Figma Redesign) -->
-    <section class="view-section" id="viewCamera">
+    <section class="view-section" id="viewSetup">
+      <div class="view-card strip-setup">
+        <div class="strip-options">
+          <p class="strip-step">1 เลือกกรอบ → 2 ถ่ายภาพ → 3 ดาวน์โหลด</p>
+          <h1>เลือกกรอบให้ Photo Strip ของคุณ</h1>
+          <p>ถ่ายทีละช็อต แล้วเรียงภาพจากบนลงล่างในกรอบที่เลือก</p>
+          <div id="stripFrameChoices" class="strip-frame-choices" aria-label="เลือกกรอบรูป"></div>
+          <label class="btn btn-secondary" for="stripFrameUpload">＋ เพิ่มกรอบเอง</label>
+          <input id="stripFrameUpload" type="file" accept="image/png,image/webp,image/jpeg,.jpg,.jpeg" class="hidden-input" />
+          <p id="stripUploadStatus" role="status">รองรับ PNG, WebP และ JPG/JPEG ระบบจะลองเจาะช่องสีเรียบในกรอบที่ไม่มีความโปร่งใสให้ ตรวจตัวอย่างก่อนถ่าย กรอบใช้ได้ในรอบการเปิดเว็บนี้</p>
+          <label for="stripShotCount">จำนวนภาพในแถบ</label>
+          <select id="stripShotCount"><option value="1">1 ภาพ</option><option value="2">2 ภาพ</option><option value="3">3 ภาพ</option><option value="4" selected>4 ภาพ</option></select>
+          <button class="btn btn-primary btn-large" id="btnBeginStrip">ใช้กรอบนี้ · ไปถ่ายภาพ →</button>
+        </div>
+        <div class="strip-preview-wrap">
+          <p id="stripPreviewLabel" aria-live="polite"></p>
+          <div id="stripPreview" class="strip-preview" aria-label="ตัวอย่างรูปเรียงแนวตั้ง"></div>
+          <small>กรอบเดียวคลุมทั้งแถบ ภาพเรียงจากบนลงล่าง</small>
+        </div>
+      </div>
+    </section>
+    <section class="view-section hidden" id="viewCamera">
       <div class="cam-studio-card">
-        <div class="cam-header-title">กล้องหลัก</div>
+        <div class="cam-header-title"><span id="stripCameraSummary"></span> <button class="btn btn-secondary btn-sm" id="btnChangeStripFrame">เปลี่ยนกรอบ</button></div>
 
         <div class="cam-studio-wrapper">
           <!-- Film Holes Left & Right -->
@@ -193,7 +219,7 @@ document.querySelector('#app').innerHTML = `
             <!-- Center Preview Area -->
             <div class="cam-center-area">
               <div class="cam-preview-box" id="previewBox" style="aspect-ratio: 4 / 3;">
-                <video id="webcam" autoplay playsinline class="mirror"></video>
+                <video id="webcam" autoplay playsinline muted class="mirror"></video>
 
                 <!-- Grid 3x3 Overlay -->
                 <div class="cam-grid-overlay" id="camGridOverlay">
@@ -239,6 +265,7 @@ document.querySelector('#app').innerHTML = `
             </div>
           </div>
 
+          <div class="camera-strip-preview"><p>ตัวอย่างกรอบทั้งแถบ</p><div id="cameraStripPreview" class="strip-preview"></div></div>
           <!-- Bottom Film Strip Toolbar -->
           <div class="cam-bottom-filmstrip">
             <div class="film-holes-horizontal">
@@ -251,7 +278,7 @@ document.querySelector('#app').innerHTML = `
               <button class="btn-tool-icon" id="btnToolBurst" title="ถ่ายภาพเรียงต่อกัน">
                 🎞️
                 <span class="tool-label">ต่อเนื่อง</span>
-                <span class="badge-count" id="burstBadge">1x</span>
+                <span class="badge-count" id="burstBadge">4x</span>
               </button>
 
               <!-- Shutter / Capture Button (อยู่ตรงกลางแถบ) -->
@@ -294,8 +321,7 @@ document.querySelector('#app').innerHTML = `
         <!-- Scrollable Asset Galleries -->
         <div class="asset-selector-box">
           <div class="asset-tabs">
-            <button class="asset-tab-btn active" id="tabFrames">🖼️ กรอบรูป (<span id="frameTabCount">${FRAMES_CATALOG.length}</span>)</button>
-            <button class="asset-tab-btn" id="tabStickers">⭐ สติกเกอร์ (<span id="stickerTabCount">${STICKERS_CATALOG.length}</span>)</button>
+            <button class="asset-tab-btn active" id="tabStickers">⭐ สติกเกอร์ (<span id="stickerTabCount">${STICKERS_CATALOG.length}</span>)</button>
             <button class="asset-tab-btn" id="tabUpload">📤 อัปโหลด AI</button>
           </div>
 
@@ -308,16 +334,7 @@ document.querySelector('#app').innerHTML = `
             <span class="progress-text" id="progressText">กำลังประมวลผล...</span>
           </div>
 
-          <div class="frame-panel" id="framePanel">
-            <!-- เนื้อในสร้างจาก renderFrameGallery() เพื่อให้กรอบที่อัปโหลดเข้ามาทีหลังแสดงผลได้ -->
-            <div class="scroll-gallery" id="galleryFrames"></div>
-            <div class="frame-actions hidden" id="frameActions">
-              <button class="btn btn-sm btn-secondary" id="btnManualCutout">✂️ เจาะช่องเอง</button>
-              <button class="btn btn-sm btn-secondary" id="btnSaveCustomFrame">💾 บันทึกกรอบนี้ลงคลังเพื่อใช้ซ้ำ</button>
-            </div>
-          </div>
-
-          <div class="scroll-gallery hidden" id="galleryStickers"></div>
+          <div class="scroll-gallery" id="galleryStickers"></div>
 
           <div class="upload-gallery-box hidden" id="galleryUpload">
             <label class="upload-dropzone">
@@ -574,8 +591,9 @@ setOnSelectionChange(() => {
 // กล่อง canvas ยืดตามภาพจริงทุกครั้งที่ขนาดเปลี่ยน (ถ่ายใหม่ / ใส่กรอบคนละสัดส่วน / โหลดเทมเพลต)
 setOnCanvasResize(() => syncCanvasContainerRatio());
 
-// Auto Start Camera
-handleStartCamera();
+// Request camera access only after choosing a frame.
+renderStripSetup();
+updateStatus(false, 'เลือกกรอบก่อนเริ่มถ่ายภาพ');
 
 // Init Auth listener
 if (isSupabaseConfigured) {
@@ -803,6 +821,15 @@ async function loadSavedStickersFromSupabase() {
  * Tab Navigation
  */
 function switchTab(tabName) {
+  if (isCapturing) return;
+  if (tabName === 'camera' && !hasChosenStrip) tabName = 'setup';
+  if (tabName === 'editor' && !getLayers().some(layer => layer.type === 'base')) {
+    showError('เลือกกรอบและถ่ายภาพก่อนดูรูปที่ได้');
+    return;
+  }
+  document.querySelector('#tabSetup').classList.remove('active');
+  document.querySelector('#viewSetup').classList.add('hidden');
+  if (tabName !== 'camera') handleStopCamera();
   tabCamera.classList.remove('active');
   tabEditor.classList.remove('active');
   tabTemplateGallery.classList.remove('active');
@@ -813,7 +840,13 @@ function switchTab(tabName) {
   viewTemplateGallery.classList.add('hidden');
   viewGallery.classList.add('hidden');
 
-  if (tabName === 'camera') {
+  if (tabName === 'setup') {
+    document.querySelector('#tabSetup').classList.add('active');
+    document.querySelector('#viewSetup').classList.remove('hidden');
+    renderStripSetup();
+    updateStatus(false, 'เลือกกรอบก่อนเริ่มถ่ายภาพ');
+  } else if (tabName === 'camera') {
+    updateStripSummary();
     tabCamera.classList.add('active');
     viewCamera.classList.remove('hidden');
     handleStartCamera();
@@ -837,30 +870,17 @@ tabEditor.addEventListener('click', () => switchTab('editor'));
 tabTemplateGallery.addEventListener('click', () => switchTab('templates'));
 tabGallery.addEventListener('click', () => switchTab('gallery'));
 
-tabFrames.addEventListener('click', () => {
-  tabFrames.classList.add('active');
-  tabStickers.classList.remove('active');
-  tabUpload.classList.remove('active');
-  framePanel.classList.remove('hidden');
-  galleryStickers.classList.add('hidden');
-  galleryUpload.classList.add('hidden');
-});
-
 tabStickers.addEventListener('click', () => {
   tabStickers.classList.add('active');
-  tabFrames.classList.remove('active');
   tabUpload.classList.remove('active');
   galleryStickers.classList.remove('hidden');
-  framePanel.classList.add('hidden');
   galleryUpload.classList.add('hidden');
 });
 
 tabUpload.addEventListener('click', () => {
   tabUpload.classList.add('active');
-  tabFrames.classList.remove('active');
   tabStickers.classList.remove('active');
   galleryUpload.classList.remove('hidden');
-  framePanel.classList.add('hidden');
   galleryStickers.classList.add('hidden');
 });
 
@@ -924,6 +944,7 @@ function cycleAspectRatio() {
   currentAspectRatio = ASPECT_STEPS[nextIdx];
   btnAspectActive.textContent = currentAspectRatio;
   previewBox.style.aspectRatio = currentAspectRatio.replace(':', ' / ');
+  updateStripSummary();
 }
 
 btnAspectActive?.addEventListener('click', cycleAspectRatio);
@@ -1017,12 +1038,12 @@ zoomSlider?.addEventListener('input', async (e) => {
  * จำลองสูตรเดียวกับที่ CSS ทำ: object-fit: cover ของ .cam-preview-box
  * แล้วตามด้วย transform: scale() ตอนซูม — เพื่อให้ภาพที่ถ่ายได้ตรงกับที่ตาเห็น
  */
-function getCaptureCrop() {
+function getCaptureCrop(slotAspect = null) {
   const vw = videoElement.videoWidth || 1280;
   const vh = videoElement.videoHeight || 720;
 
   const [aw, ah] = currentAspectRatio.split(':').map(Number);
-  const target = aw / ah;
+  const target = slotAspect || aw / ah;
 
   // object-fit: cover — ครอปกลางภาพให้ได้อัตราส่วนของกล่องพรีวิว
   let sw, sh;
@@ -1054,6 +1075,9 @@ function getCaptureCrop() {
 function syncCanvasContainerRatio() {
   if (!canvasContainer || !canvasElement.width || !canvasElement.height) return;
   canvasContainer.style.aspectRatio = `${canvasElement.width} / ${canvasElement.height}`;
+  canvasContainer.style.maxWidth = canvasElement.height > canvasElement.width
+    ? `${Math.round(680 * canvasElement.width / canvasElement.height)}px` : '';
+  canvasContainer.style.marginInline = 'auto';
 }
 
 // 5. Grid Overlay Toggle
@@ -1063,8 +1087,8 @@ btnToolGrid?.addEventListener('click', () => {
   camGridOverlay.classList.toggle('active', isGridActive);
 });
 
-// 6. Burst Mode Cycle (1, 2, 4, 6)
-const BURST_STEPS = [1, 2, 4, 6];
+// 6. Shot count cycle (1, 2, 3, 4)
+const BURST_STEPS = [1, 2, 3, 4];
 
 btnToolBurst?.addEventListener('click', () => {
   const currentIdx = BURST_STEPS.indexOf(activeBurstCount);
@@ -1072,6 +1096,8 @@ btnToolBurst?.addEventListener('click', () => {
   activeBurstCount = BURST_STEPS[nextIdx];
   burstBadge.textContent = `${activeBurstCount}x`;
   btnToolBurst.classList.toggle('active', activeBurstCount > 1);
+  document.querySelector('#stripShotCount').value = String(activeBurstCount);
+  updateStripSummary();
 });
 
 /**
@@ -1081,6 +1107,10 @@ async function handleStartCamera() {
   hideError();
   try {
     await initCamera(videoElement);
+    if (viewCamera.classList.contains('hidden')) {
+      handleStopCamera();
+      return;
+    }
     updateMirrorState();
     usingCssZoom = true; // กล้องคนละตัวรองรับซูมฮาร์ดแวร์ไม่เหมือนกัน ต้องเริ่มใหม่
     applyLiveStreamFilters();
@@ -1138,161 +1168,6 @@ function captureSingleFrame(filterOptions) {
   offCtx.drawImage(videoElement, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, w, h);
   return offscreen;
 }
-
-/**
- * Composes multiple captured canvases into a single Photobooth Grid Card image.
- * 2 → 2×1 vertical strip, 4 → 2×2 grid, 6 → 3×2 grid
- */
-function composeBurstGrid(frames) {
-  const count = frames.length;
-  let cols, rows;
-  if (count <= 2) {
-    cols = 1;
-    rows = 2; // 2 photos stacked vertically (classic photobooth strip)
-  } else if (count <= 4) {
-    cols = 2;
-    rows = 2; // 4 photos in 2x2 grid
-  } else {
-    cols = 2;
-    rows = 3; // 6 photos in 3x2 grid
-  }
-
-  const fw = frames[0].width;
-  const fh = frames[0].height;
-  const gap = 16;
-  const padding = 24;
-
-  const totalW = cols * fw + (cols - 1) * gap + padding * 2;
-  const totalH = rows * fh + (rows - 1) * gap + padding * 2;
-
-  const composite = document.createElement('canvas');
-  composite.width = totalW;
-  composite.height = totalH;
-  const cctx = composite.getContext('2d');
-
-  // Photobooth Card background frame — ใช้ design token เดียวกับธีมพาสเทล
-  const themeCss = getComputedStyle(document.documentElement);
-  const cardBg = themeCss.getPropertyValue('--bg-page').trim() || '#FFF5F7';
-  const cardBorder = themeCss.getPropertyValue('--pink').trim() || '#FFB3C7';
-
-  cctx.fillStyle = cardBg;
-  cctx.fillRect(0, 0, totalW, totalH);
-
-  // Decorative border
-  cctx.strokeStyle = cardBorder;
-  cctx.lineWidth = 2;
-  cctx.strokeRect(8, 8, totalW - 16, totalH - 16);
-
-  frames.forEach((frame, i) => {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    const x = padding + col * (fw + gap);
-    const y = padding + row * (fh + gap);
-    cctx.drawImage(frame, x, y, fw, fh);
-  });
-
-  return composite;
-}
-
-async function handleCapture() {
-  hideError();
-  btnCapture.disabled = true;
-
-  // อบเฉพาะความสว่าง (ถือเป็นการตั้งค่ากล้อง) ส่วนฟิลเตอร์เก็บไว้เป็นคุณสมบัติของ layer
-  // จะได้เปลี่ยนฟิลเตอร์ทีหลังในหน้าตกแต่งได้โดยไม่ซ้อนกันสองชั้น
-  const filterCss = FILTERS_CATALOG[activeFilterIndex].css;
-  const filterOptions = { filter: `brightness(${activeBrightness})` };
-
-  try {
-    if (activeBurstCount <= 1) {
-      // --- Single shot ---
-      if (activeTimerSeconds > 0) {
-        countdownOverlay.classList.add('active');
-      }
-
-      startCountdown(
-        activeTimerSeconds,
-        (remaining) => {
-          if (remaining > 0) countdownNumber.textContent = remaining;
-          else countdownNumber.textContent = '📸';
-        },
-        async () => {
-          await captureFrame(videoElement, { ...filterOptions, crop: getCaptureCrop() });
-          updateLayer('base-layer', { filter: filterCss });
-          activeEditorFilter = filterCss;
-          renderEditorFilterRow();
-
-          setTimeout(() => {
-            countdownOverlay.classList.remove('active');
-            btnCapture.disabled = false;
-            switchTab('editor');
-            updateStatus(true, 'ถ่ายภาพแล้ว - ตกแต่งและใส่กรอบได้เลย!');
-          }, 400);
-        }
-      );
-    } else {
-      // --- Burst Mode: countdown per shot + compose into grid ---
-      const capturedFrames = [];
-
-      for (let i = 1; i <= activeBurstCount; i++) {
-        countdownOverlay.classList.add('active');
-
-        await new Promise((resolve) => {
-          if (activeTimerSeconds > 0) {
-            startCountdown(
-              activeTimerSeconds,
-              (remaining) => {
-                if (remaining > 0) {
-                  countdownNumber.textContent = `${remaining}s (📸 ${i}/${activeBurstCount})`;
-                } else {
-                  countdownNumber.textContent = `📸 #${i}`;
-                }
-              },
-              () => {
-                const frame = captureSingleFrame(filterOptions);
-                capturedFrames.push(frame);
-                resolve();
-              }
-            );
-          } else {
-            countdownNumber.textContent = `📸 ${i}/${activeBurstCount}`;
-            const frame = captureSingleFrame(filterOptions);
-            capturedFrames.push(frame);
-            resolve();
-          }
-        });
-
-        // Flash delay between burst shots
-        if (i < activeBurstCount) {
-          await new Promise((res) => setTimeout(res, activeTimerSeconds > 0 ? 500 : 300));
-        }
-      }
-
-      // Compose all burst photos into a single Photobooth Grid Card
-      const compositeCanvas = composeBurstGrid(capturedFrames);
-
-      // Set target canvas & inject composite grid as base layer in editor
-      setTargetCanvas(canvasElement);
-      setBaseLayerImage(compositeCanvas);
-      updateLayer('base-layer', { filter: filterCss });
-      activeEditorFilter = filterCss;
-      renderEditorFilterRow();
-
-      setTimeout(() => {
-        countdownOverlay.classList.remove('active');
-        btnCapture.disabled = false;
-        switchTab('editor');
-        updateStatus(true, `ถ่ายภาพเรียง ${activeBurstCount} ภาพเป็น Grid รวมเรียบร้อยแล้ว!`);
-      }, 400);
-    }
-  } catch (err) {
-    console.error('Capture error:', err);
-    showError(`เกิดข้อผิดพลาดในการถ่ายภาพ: ${err.message}`);
-    countdownOverlay.classList.remove('active');
-    btnCapture.disabled = false;
-  }
-}
-
 
 /* Frame Catalog Handler ย้ายไปผูกใน renderFrameGallery() แล้ว
    (ของเดิมผูกครั้งเดียวตอนบูต กรอบที่อัปโหลดทีหลังจึงกดไม่ได้) */
@@ -1549,7 +1424,7 @@ async function handleFrameUpload(e) {
 /**
  * Save Custom Frame to Gallery Catalog (and Supabase Storage)
  */
-btnSaveCustomFrame.addEventListener('click', async () => {
+btnSaveCustomFrame?.addEventListener('click', async () => {
   if (!lastUploadedFrameUrl) return;
 
   const frameName = prompt('ตั้งชื่อกรอบรูปที่ต้องการบันทึก:', 'กรอบส่วนตัว') || 'กรอบส่วนตัว';
@@ -2020,3 +1895,222 @@ btnExport?.addEventListener('click', () => {
 });
 
 btnSaveToGallery?.addEventListener('click', handleSaveToSessionGallery);
+
+function updateStripSummary() {
+  const layout = selectedStripFrame?.layout;
+  document.querySelector('#stripCameraSummary').textContent = `${selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ภาพ${layout ? 'ตามช่องในกรอบ' : 'เรียงแนวตั้ง'}`;
+  btnAspectActive.disabled = !!layout;
+  btnAspectArrow.disabled = !!layout;
+  btnAspectActive.textContent = layout ? 'ตามกรอบ' : currentAspectRatio;
+  previewBox.style.aspectRatio = layout
+    ? `${layout.slots[0].width} / ${layout.slots[0].height}` : currentAspectRatio.replace(':', ' / ');
+  renderStripPreview(document.querySelector('#cameraStripPreview'));
+}
+
+function renderStripSetup() {
+  const layout = selectedStripFrame?.layout;
+  if (layout) activeBurstCount = layout.slots.length;
+  const countSelect = document.querySelector('#stripShotCount');
+  countSelect.value = String(activeBurstCount);
+  countSelect.disabled = !!layout;
+  countSelect.title = layout ? 'จำนวนภาพตรงกับช่องที่ตรวจพบในกรอบ' : 'เลือกจำนวนภาพ';
+  btnToolBurst.disabled = !!layout;
+  burstBadge.textContent = `${activeBurstCount}x`;
+  const choices = document.querySelector('#stripFrameChoices');
+  choices.replaceChildren();
+  [null, ...FRAMES_CATALOG.filter(frame => BUILTIN_FRAME_IDS.has(frame.id) || frame.stripUpload)].forEach(frame => {
+    const button = document.createElement('button');
+    button.className = 'strip-frame-choice';
+    button.type = 'button';
+    button.setAttribute('aria-pressed', String((frame?.id || null) === (selectedStripFrame?.id || null)));
+    if (frame) {
+      const img = document.createElement('img');
+      img.src = frame.src;
+      img.alt = '';
+      button.append(img);
+    }
+    const label = document.createElement('span');
+    label.textContent = frame?.name || 'ไม่ใช้กรอบ';
+    button.append(label);
+    button.addEventListener('click', () => { selectedStripFrame = frame; renderStripSetup(); });
+    choices.append(button);
+  });
+  document.querySelector('#stripPreviewLabel').textContent = `${selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ${layout ? 'ช่อง (กำหนดจำนวนภาพตามกรอบ)' : 'ภาพ'}`;
+  renderStripPreview(document.querySelector('#stripPreview'));
+  updateStripSummary();
+}
+
+function renderStripPreview(preview) {
+  preview.replaceChildren();
+  const [aw, ah] = currentAspectRatio.split(':').map(Number);
+  const layout = selectedStripFrame?.layout || getStripLayout(activeBurstCount, 960, aw / ah);
+  preview.style.aspectRatio = `${layout.width} / ${layout.height}`;
+  layout.slots.forEach((rect, index) => {
+    const slot = document.createElement('div');
+    slot.className = 'strip-preview-slot';
+    slot.style.left = `${rect.x / layout.width * 100}%`;
+    slot.style.top = `${rect.y / layout.height * 100}%`;
+    slot.style.width = `${rect.width / layout.width * 100}%`;
+    slot.style.height = `${rect.height / layout.height * 100}%`;
+    slot.textContent = `ภาพที่ ${index + 1}`;
+    preview.append(slot);
+  });
+  const brand = document.createElement('small');
+  brand.textContent = 'SnapFrame';
+  if (!selectedStripFrame?.layout) preview.append(brand);
+  if (selectedStripFrame) {
+    const overlay = document.createElement('img');
+    overlay.className = 'strip-whole-frame';
+    overlay.src = selectedStripFrame.src;
+    overlay.alt = 'กรอบเดียวคลุมทั้งแถบ';
+    preview.append(overlay);
+  }
+}
+
+async function handleCapture() {
+  if (isCapturing) return;
+  if (!videoElement.videoWidth || videoElement.readyState < 2) {
+    showError('กล้องยังไม่พร้อม กรุณาอนุญาตการใช้กล้องและรอภาพปรากฏก่อนถ่าย');
+    return;
+  }
+  hideError();
+  isCapturing = true;
+  const controls = [...document.querySelectorAll('.nav-tabs button, #viewCamera button, #viewCamera input')];
+  const disabledStates = controls.map(control => control.disabled);
+  controls.forEach(control => { control.disabled = true; });
+  const count = activeBurstCount;
+  const frameLayout = selectedStripFrame?.layout || null;
+  const aspect = currentAspectRatio.split(':').map(Number);
+  const filterCss = FILTERS_CATALOG[activeFilterIndex].css;
+  const filterOptions = {
+    filter: `${filterCss === 'none' ? '' : filterCss} brightness(${activeBrightness})`.trim(),
+    crop: getCaptureCrop()
+  };
+  let completed = false;
+  try {
+    const decoration = await loadStripDecoration();
+    const frames = [];
+    for (let i = 1; i <= count; i++) {
+      if (frameLayout) {
+        const slot = frameLayout.slots[i - 1];
+        previewBox.style.aspectRatio = `${slot.width} / ${slot.height}`;
+        filterOptions.crop = getCaptureCrop(slot.width / slot.height);
+      }
+      countdownOverlay.classList.add('active');
+      updateStatus(true, `กำลังถ่ายภาพ ${i}/${count}`);
+      await new Promise(resolve => startCountdown(activeTimerSeconds, remaining => {
+        countdownNumber.textContent = remaining > 0 ? `${remaining}s (📸 ${i}/${count})` : `📸 ${i}/${count}`;
+      }, resolve));
+      frames.push(captureSingleFrame(filterOptions));
+      if (i < count) await new Promise(resolve => setTimeout(resolve, activeTimerSeconds > 0 ? 500 : 300));
+    }
+    const strip = composePhotoStrip(frames, decoration, aspect[0] / aspect[1], frameLayout);
+    setTargetCanvas(canvasElement);
+    getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id));
+    setBaseLayerImage(strip);
+    activeEditorFilter = 'none';
+    renderEditorFilterRow();
+    completed = true;
+  } catch (err) {
+    showError(`เกิดข้อผิดพลาดในการถ่ายภาพ: ${err.message}`);
+  } finally {
+    countdownOverlay.classList.remove('active');
+    isCapturing = false;
+    controls.forEach((control, index) => { control.disabled = disabledStates[index]; });
+  }
+  if (completed) {
+    switchTab('editor');
+    updateStatus(true, `เรียบร้อย! ${count} ภาพเรียงแนวตั้ง พร้อมดาวน์โหลด`);
+  }
+}
+
+function loadStripDecoration() {
+  if (!selectedStripFrame) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('โหลดกรอบไม่สำเร็จ กรุณาเลือกกรอบใหม่แล้วลองอีกครั้ง'));
+    img.src = selectedStripFrame.src;
+  });
+}
+
+document.querySelector('#tabSetup').addEventListener('click', () => switchTab('setup'));
+document.querySelector('#btnChangeStripFrame').addEventListener('click', () => switchTab('setup'));
+document.querySelector('#btnBeginStrip').addEventListener('click', () => {
+  hasChosenStrip = true;
+  switchTab('camera');
+});
+document.querySelector('#stripShotCount').addEventListener('change', event => {
+  activeBurstCount = Number(event.target.value);
+  burstBadge.textContent = `${activeBurstCount}x`;
+  renderStripSetup();
+});
+
+document.querySelector('#stripFrameUpload').addEventListener('change', async event => {
+  const input = event.target;
+  const file = input.files?.[0];
+  if (!file) return;
+  const status = document.querySelector('#stripUploadStatus');
+  let url;
+  input.disabled = true;
+  try {
+    if (!['image/png', 'image/webp', 'image/jpeg'].includes(file.type)
+      && !(file.type === '' && /\.(png|webp|jpe?g)$/i.test(file.name))) {
+      throw new Error('กรุณาเลือกไฟล์ PNG, WebP หรือ JPG/JPEG');
+    }
+    if (file.size > 15 * 1024 * 1024) throw new Error('กรุณาเลือกไฟล์ขนาดไม่เกิน 15 MB');
+    status.textContent = 'กำลังตรวจสอบกรอบ…';
+    url = URL.createObjectURL(file);
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('ไม่สามารถอ่านไฟล์รูปนี้ได้'));
+      img.src = url;
+    });
+    const check = document.createElement('canvas');
+    check.width = Math.min(img.naturalWidth, 512);
+    check.height = Math.max(1, Math.round(check.width * img.naturalHeight / img.naturalWidth));
+    if (check.height > 4096) throw new Error('กรอบยาวเกินไป กรุณาใช้สัดส่วนใกล้เคียงตัวอย่าง');
+    const ctx = check.getContext('2d');
+    ctx.drawImage(img, 0, 0, check.width, check.height);
+    const pixels = ctx.getImageData(0, 0, check.width, check.height).data;
+    let transparent = false;
+    for (let i = 3; i < pixels.length; i += 4) {
+      if (pixels[i] < 128) { transparent = true; break; }
+    }
+    if (!transparent) {
+      status.textContent = 'กำลังเจาะช่องใส่รูปอัตโนมัติ…';
+      // Allow the progress message to paint before processing the image.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const result = await cutoutFrameSlots(file, {
+        onProgress: progress => { status.textContent = progress.message; }
+      });
+      if (!result.slotCount || !result.removedRatio || result.blob.type !== 'image/png') {
+        throw new Error('ไม่พบช่องใส่รูปที่เจาะได้ กรุณาใช้ JPG ที่มีช่องสีเรียบล้อมด้วยขอบกรอบ หรือ PNG ที่เจาะช่องโปร่งใสแล้ว');
+      }
+      URL.revokeObjectURL(url);
+      url = URL.createObjectURL(result.blob);
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('ไม่สามารถอ่านกรอบหลังเจาะช่องได้'));
+        img.src = url;
+      });
+      ctx.clearRect(0, 0, check.width, check.height);
+      ctx.drawImage(img, 0, 0, check.width, check.height);
+    }
+    const layout = getFrameLayout(ctx.getImageData(0, 0, check.width, check.height));
+    const frame = { id: `strip-${crypto.randomUUID()}`, name: file.name.replace(/\.[^.]+$/, ''), src: url, stripUpload: true, layout };
+    FRAMES_CATALOG.unshift(frame);
+    selectedStripFrame = frame;
+    url = null; // Keep the object URL alive while this session uses the frame.
+    renderStripSetup();
+    status.textContent = `พบ ${layout.slots.length} ช่อง ระบบจะถ่ายและครอปรูปให้พอดีแต่ละช่อง ตรวจตัวอย่างก่อนถ่าย กรอบนี้ใช้ได้จนกว่าจะรีเฟรชหน้าเว็บ`;
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+    input.disabled = false;
+    input.value = '';
+  }
+});
