@@ -212,6 +212,7 @@ document.querySelector('#app').innerHTML = `
               <!-- Filter Swatches (3 visible at a time) -->
               <div class="filter-group">
                 <span class="panel-label">ฟิลเตอร์</span>
+                <select id="cameraFilterSelect" aria-label="เลือกฟิลเตอร์"></select>
                 <button class="btn-arrow-toggle" id="btnFilterUp">▲</button>
                 <div class="filter-carousel-viewport">
                   <div class="filter-carousel-track" id="filterCarouselTrack">
@@ -264,14 +265,13 @@ document.querySelector('#app').innerHTML = `
                 <span class="panel-label">ความสว่าง</span>
                 <span class="brightness-icon">☀️</span>
                 <div class="brightness-slider-wrap">
-                  <input type="range" class="brightness-input" id="brightnessSlider" min="0.5" max="1.5" step="0.05" value="1">
+                  <input type="range" class="brightness-input" id="brightnessSlider" aria-label="ความสว่าง" min="0.5" max="1.5" step="0.05" value="1">
                 </div>
                 <span class="brightness-icon">🔆</span>
               </div>
             </div>
           </div>
 
-          <div class="camera-strip-preview"><p>ตัวอย่างกรอบทั้งแถบ</p><div id="cameraStripPreview" class="strip-preview"></div></div>
           <!-- Bottom Film Strip Toolbar -->
           <div class="cam-bottom-filmstrip">
             <div class="film-holes-horizontal">
@@ -979,6 +979,7 @@ function renderFilterCarousel() {
 
 function selectFilter(index) {
   activeFilterIndex = index;
+  document.querySelector('#cameraFilterSelect').value = String(index);
   renderFilterCarousel();
   applyLiveStreamFilters();
 }
@@ -1012,6 +1013,10 @@ filterCarouselViewport?.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 // Initial Carousel Render
+const cameraFilterSelect = document.querySelector('#cameraFilterSelect');
+cameraFilterSelect.replaceChildren(...FILTERS_CATALOG.map((filter, index) => new Option(filter.name, String(index))));
+cameraFilterSelect.value = String(activeFilterIndex);
+cameraFilterSelect.addEventListener('change', event => selectFilter(Number(event.target.value)));
 renderFilterCarousel();
 
 // 3. Countdown Timer Cycle (0, 3, 5, 10)
@@ -1926,7 +1931,6 @@ function updateStripSummary() {
   btnAspectActive.textContent = layout ? 'ตามกรอบ' : currentAspectRatio;
   previewBox.style.aspectRatio = layout
     ? `${layout.slots[0].width} / ${layout.slots[0].height}` : currentAspectRatio.replace(':', ' / ');
-  renderStripPreview(document.querySelector('#cameraStripPreview'));
 }
 
 function renderStripSetup() {
@@ -2010,7 +2014,7 @@ async function handleCapture() {
   }
   hideError();
   isCapturing = true;
-  const controls = [...document.querySelectorAll('.nav-tabs button, #viewCamera button, #viewCamera input')];
+  const controls = [...document.querySelectorAll('.nav-tabs button, #viewCamera button, #viewCamera input, #viewCamera select')];
   const disabledStates = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });
   const count = activeBurstCount;
