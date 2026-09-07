@@ -1681,9 +1681,74 @@ body {
 .strip-whole-frame { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
 .camera-strip-preview { text-align: center; padding: 12px; }
 .camera-strip-preview .strip-preview { width: 130px; }
+.strip-preview.strip-preview-horizontal { width: 100%; max-width: 640px; }
+.camera-strip-preview .strip-preview.strip-preview-horizontal { width: 320px; max-width: 100%; }
+#stripOrientation, #stripCutoutMode { padding: 8px; border-radius: 8px; margin: 8px; }
+.strip-preview-horizontal .strip-preview-slot { font-size: clamp(9px, 2vw, 13px); }
 #stripUploadStatus { font-size: 13px; color: #71566a; }
 .cam-header-title #stripCameraSummary { font-size: 14px; }
 @media (max-width: 680px) {
   .strip-setup { grid-template-columns: 1fr; padding: 18px; gap: 20px; }
   .strip-frame-choices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Keep dialogs reachable on short screens and when the keyboard is open. */
+.modal-overlay { overflow-y: auto; }
+.modal-card {
+  max-height: calc(100vh - 2rem);
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+}
+.modal-card.cutout-card { max-width: 640px; }
+.cutout-stage { flex-shrink: 0; }
+.cutout-actions { flex-wrap: wrap; }
+.cutout-actions .btn { flex: 1 1 110px; }
+.strip-options, .strip-preview-wrap, .cam-center-area { min-width: 0; }
+.strip-options p, .strip-frame-choice span { overflow-wrap: anywhere; }
+.cam-header-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+@media (min-width: 681px) and (max-width: 899px) {
+  .strip-setup { grid-template-columns: minmax(0, 1fr) 220px; padding: 24px; gap: 20px; }
+  .strip-frame-choices { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 680px) {
+  .strip-options > label { display: block; }
+  #stripOrientation, #stripCutoutMode, #stripShotCount {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    margin: 8px 0 16px;
+    font: inherit;
+    font-size: 16px;
+  }
+  .cam-workspace {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px;
+    padding: 12px 18px;
+    min-height: 0;
+    align-items: start;
+  }
+  .cam-center-area { grid-column: 1 / -1; grid-row: 1; }
+  .cam-left-panel, .cam-right-panel { grid-row: 2; min-width: 0; }
+  .cam-left-panel { grid-column: 1; }
+  .cam-right-panel { grid-column: 2; }
+  .cam-preview-box { max-width: 100%; }
+  .editor-actions { flex-wrap: wrap; }
+  .editor-actions > .btn { flex: 1 1 140px; }
+  .modal-overlay { padding: 12px; }
+  .modal-card { padding: 20px 16px; }
+  .modal-card h3 { padding-right: 36px; }
+  .form-box input { font-size: 16px; }
+  .cutout-tolerance { flex-wrap: wrap; }
+  .cutout-tolerance input[type="range"] { min-width: 120px; min-height: 44px; }
+}
+
+@media (pointer: coarse) {
+  .btn, .btn-close, .btn-arrow-toggle, .btn-aspect-opt, .btn-timer-opt {
+    min-height: 44px;
+    min-width: 44px;
+    touch-action: manipulation;
+  }
+  #frameCutoutCanvas { touch-action: manipulation; }
 }

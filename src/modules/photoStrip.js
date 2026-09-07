@@ -1,24 +1,28 @@
 // A single layout shared by the frame preview and the exported photo strip.
-export function getStripLayout(count, width = 960, aspect = 4 / 3) {
+export function getStripLayout(count, width = 960, aspect = 4 / 3, orientation = 'vertical') {
   if (!Number.isInteger(count) || count < 1 || count > 4) {
     throw new Error('Photo Strip ต้องมี 1–4 ภาพ');
   }
   const padding = Math.round(width * 0.035);
   const gap = Math.round(width * 0.025);
-  const photoWidth = width - padding * 2;
+  const horizontal = orientation === 'horizontal';
+  const columns = horizontal ? (count === 4 ? 2 : count) : 1;
+  const rows = Math.ceil(count / columns);
+  const photoWidth = (width - padding * 2 - (columns - 1) * gap) / columns;
   const photoHeight = Math.round(photoWidth / aspect);
   return {
     width,
-    height: padding * 2 + count * photoHeight + (count - 1) * gap + padding,
+    height: padding * 3 + rows * photoHeight + (rows - 1) * gap,
     slots: Array.from({ length: count }, (_, i) => ({
-      x: padding, y: padding + i * (photoHeight + gap),
+      x: padding + (i % columns) * (photoWidth + gap),
+      y: padding + Math.floor(i / columns) * (photoHeight + gap),
       width: photoWidth, height: photoHeight
     }))
   };
 }
 
-export function composePhotoStrip(frames, decoration, aspect = 4 / 3, frameLayout = null) {
-  const layout = frameLayout || getStripLayout(frames.length, 960, aspect);
+export function composePhotoStrip(frames, decoration, aspect = 4 / 3, frameLayout = null, orientation = 'vertical') {
+  const layout = frameLayout || getStripLayout(frames.length, 960, aspect, orientation);
   if (layout.slots.length !== frames.length) throw new Error('จำนวนภาพไม่ตรงกับช่องในกรอบ');
   const canvas = document.createElement('canvas');
   canvas.width = layout.width;

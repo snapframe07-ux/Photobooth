@@ -113,6 +113,7 @@ let usingCssZoom = true;
 let activeEditorFilter = 'none';   // ฟิลเตอร์ที่ใช้กับ base layer ในหน้าตกแต่ง
 let activeBurstCount = 4;
 let selectedStripFrame = FRAMES_CATALOG[0];
+let stripOrientation = 'vertical';
 let isCapturing = false;
 let hasChosenStrip = false;
 let isGridActive = false;
@@ -160,9 +161,14 @@ document.querySelector('#app').innerHTML = `
           <h1>เลือกกรอบให้ Photo Strip ของคุณ</h1>
           <p>ถ่ายทีละช็อต แล้วเรียงภาพจากบนลงล่างในกรอบที่เลือก</p>
           <div id="stripFrameChoices" class="strip-frame-choices" aria-label="เลือกกรอบรูป"></div>
+          <label for="stripCutoutMode">วิธีเจาะช่องกรอบที่เพิ่มเอง</label>
+          <select id="stripCutoutMode"><option value="auto">ตรวจหาและเจาะอัตโนมัติ</option><option value="manual">เจาะช่องเองด้วยการคลิก</option></select>
           <label class="btn btn-secondary" for="stripFrameUpload">＋ เพิ่มกรอบเอง</label>
           <input id="stripFrameUpload" type="file" accept="image/png,image/webp,image/jpeg,.jpg,.jpeg" class="hidden-input" />
           <p id="stripUploadStatus" role="status">รองรับ PNG, WebP และ JPG/JPEG ระบบจะลองเจาะช่องสีเรียบในกรอบที่ไม่มีความโปร่งใสให้ ตรวจตัวอย่างก่อนถ่าย กรอบใช้ได้ในรอบการเปิดเว็บนี้</p>
+          <label for="stripOrientation">การเรียงภาพในกรอบ</label>
+          <select id="stripOrientation" aria-describedby="stripOrientationHint"><option value="vertical">แนวตั้ง (บนลงล่าง)</option><option value="horizontal">แนวนอน (4 ภาพจัดแบบ 2×2)</option></select>
+          <p id="stripOrientationHint">แนวนอนเรียงจากซ้ายไปขวา เมื่อเลือก 4 ภาพจะจัดเป็น 2 แถว แถวละ 2 ภาพ</p>
           <label for="stripShotCount">จำนวนภาพในแถบ</label>
           <select id="stripShotCount"><option value="1">1 ภาพ</option><option value="2">2 ภาพ</option><option value="3">3 ภาพ</option><option value="4" selected>4 ภาพ</option></select>
           <button class="btn btn-primary btn-large" id="btnBeginStrip">ใช้กรอบนี้ · ไปถ่ายภาพ →</button>
@@ -456,6 +462,7 @@ document.querySelector('#app').innerHTML = `
         <button class="btn btn-sm btn-danger" id="btnCutoutCancel">ยกเลิก</button>
         <button class="btn btn-sm btn-primary" id="btnCutoutApply">ใช้กรอบนี้</button>
       </div>
+      <p id="cutoutStatus" role="status"></p>
     </div>
   </div>
 `;
@@ -1258,7 +1265,7 @@ function drawCutoutPreview() {
   g.drawImage(work, 0, 0);
 }
 
-async function openCutoutPicker(source) {
+async function openCutoutPicker(source, requireSlots = false) {
   if (!source) return null;
   const { canvas, ctx, w, h } = await loadFrameCanvas(source);
   const imageData = ctx.getImageData(0, 0, w, h);
@@ -1270,11 +1277,14 @@ async function openCutoutPicker(source) {
     h,
     imageData,
     original: new Uint8ClampedArray(imageData.data),
+    requireSlots,
     resolve: null
   };
 
   frameCutoutCanvas.width = w;
   frameCutoutCanvas.height = h;
+  document.querySelector('#cutoutStatus').textContent = requireSlots
+    ? 'คลิกพื้นที่สีเรียบภายในช่องภาพ 1–4 ช่อง ปรับความไวหากเจาะไม่ครบ หรือล้างทั้งหมดเพื่อเริ่มใหม่' : '';
   drawCutoutPreview();
   frameCutoutModal.classList.remove('hidden');
 
@@ -1331,8 +1341,20 @@ btnCloseCutoutModal?.addEventListener('click', () => closeCutoutPicker(null));
 btnCutoutApply?.addEventListener('click', async () => {
   if (!cutoutState) return closeCutoutPicker(null);
   const { work, workCtx, imageData } = cutoutState;
+  if (cutoutState.requireSlots) {
+    try {
+      getFrameLayout(imageData);
+    } catch (error) {
+      document.querySelector('#cutoutStatus').textContent = error.message;
+      return;
+    }
+  }
   workCtx.putImageData(imageData, 0, 0);
   const blob = await new Promise((resolve) => work.toBlob(resolve, 'image/png'));
+  if (!blob) {
+    document.querySelector('#cutoutStatus').textContent = 'บันทึกกรอบไม่สำเร็จ กรุณาลองอีกครั้ง';
+    return;
+  }
   closeCutoutPicker(blob);
 });
 
@@ -1898,7 +1920,7 @@ btnSaveToGallery?.addEventListener('click', handleSaveToSessionGallery);
 
 function updateStripSummary() {
   const layout = selectedStripFrame?.layout;
-  document.querySelector('#stripCameraSummary').textContent = `${selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ภาพ${layout ? 'ตามช่องในกรอบ' : 'เรียงแนวตั้ง'}`;
+  document.querySelector('#stripCameraSummary').textContent = `${selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ภาพ${getStripDirectionLabel()}`;
   btnAspectActive.disabled = !!layout;
   btnAspectArrow.disabled = !!layout;
   btnAspectActive.textContent = layout ? 'ตามกรอบ' : currentAspectRatio;
@@ -1909,6 +1931,12 @@ function updateStripSummary() {
 
 function renderStripSetup() {
   const layout = selectedStripFrame?.layout;
+  const orientationSelect = document.querySelector('#stripOrientation');
+  orientationSelect.value = stripOrientation;
+  orientationSelect.disabled = !!layout;
+  document.querySelector('#stripOrientationHint').textContent = layout
+    ? 'กรอบนี้จัดภาพตามช่องที่กำหนดไว้ เลือกกรอบสำเร็จรูปเพื่อเปลี่ยนแนวการเรียงภาพ'
+    : 'แนวนอนเรียงจากซ้ายไปขวา เมื่อเลือก 4 ภาพจะจัดเป็น 2 แถว แถวละ 2 ภาพ';
   if (layout) activeBurstCount = layout.slots.length;
   const countSelect = document.querySelector('#stripShotCount');
   countSelect.value = String(activeBurstCount);
@@ -1935,15 +1963,22 @@ function renderStripSetup() {
     button.addEventListener('click', () => { selectedStripFrame = frame; renderStripSetup(); });
     choices.append(button);
   });
-  document.querySelector('#stripPreviewLabel').textContent = `${selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ${layout ? 'ช่อง (กำหนดจำนวนภาพตามกรอบ)' : 'ภาพ'}`;
+  document.querySelector('#stripPreviewLabel').textContent = `${selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ภาพ${getStripDirectionLabel()}`;
   renderStripPreview(document.querySelector('#stripPreview'));
   updateStripSummary();
+}
+
+function getStripDirectionLabel() {
+  if (!selectedStripFrame?.layout && stripOrientation === 'horizontal' && activeBurstCount === 4) return 'จัดแบบ 2×2';
+  return selectedStripFrame?.layout ? 'ตามช่องในกรอบ' : stripOrientation === 'horizontal' ? 'เรียงแนวนอน' : 'เรียงแนวตั้ง';
 }
 
 function renderStripPreview(preview) {
   preview.replaceChildren();
   const [aw, ah] = currentAspectRatio.split(':').map(Number);
-  const layout = selectedStripFrame?.layout || getStripLayout(activeBurstCount, 960, aw / ah);
+  const layout = selectedStripFrame?.layout || getStripLayout(activeBurstCount, 960, aw / ah, stripOrientation);
+  preview.classList.toggle('strip-preview-horizontal', layout.width > layout.height);
+  preview.setAttribute('aria-label', `ตัวอย่าง ${activeBurstCount} ภาพ${getStripDirectionLabel()}`);
   preview.style.aspectRatio = `${layout.width} / ${layout.height}`;
   layout.slots.forEach((rect, index) => {
     const slot = document.createElement('div');
@@ -2004,7 +2039,7 @@ async function handleCapture() {
       frames.push(captureSingleFrame(filterOptions));
       if (i < count) await new Promise(resolve => setTimeout(resolve, activeTimerSeconds > 0 ? 500 : 300));
     }
-    const strip = composePhotoStrip(frames, decoration, aspect[0] / aspect[1], frameLayout);
+    const strip = composePhotoStrip(frames, decoration, aspect[0] / aspect[1], frameLayout, stripOrientation);
     setTargetCanvas(canvasElement);
     getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id));
     setBaseLayerImage(strip);
@@ -2020,7 +2055,7 @@ async function handleCapture() {
   }
   if (completed) {
     switchTab('editor');
-    updateStatus(true, `เรียบร้อย! ${count} ภาพเรียงแนวตั้ง พร้อมดาวน์โหลด`);
+    updateStatus(true, `เรียบร้อย! ${count} ภาพ${getStripDirectionLabel()} พร้อมดาวน์โหลด`);
   }
 }
 
@@ -2041,6 +2076,11 @@ document.querySelector('#btnBeginStrip').addEventListener('click', () => {
   hasChosenStrip = true;
   switchTab('camera');
 });
+document.querySelector('#stripOrientation').addEventListener('change', event => {
+  stripOrientation = event.target.value;
+  renderStripSetup();
+});
+
 document.querySelector('#stripShotCount').addEventListener('change', event => {
   activeBurstCount = Number(event.target.value);
   burstBadge.textContent = `${activeBurstCount}x`;
@@ -2060,8 +2100,18 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
       throw new Error('กรุณาเลือกไฟล์ PNG, WebP หรือ JPG/JPEG');
     }
     if (file.size > 15 * 1024 * 1024) throw new Error('กรุณาเลือกไฟล์ขนาดไม่เกิน 15 MB');
+    const manual = document.querySelector('#stripCutoutMode').value === 'manual';
+    let source = file;
+    if (manual) {
+      status.textContent = 'เลือกช่องภาพที่ต้องการเจาะในกรอบ';
+      source = await openCutoutPicker(file, true);
+      if (!source) {
+        status.textContent = 'ยกเลิกการเพิ่มกรอบแล้ว';
+        return;
+      }
+    }
     status.textContent = 'กำลังตรวจสอบกรอบ…';
-    url = URL.createObjectURL(file);
+    url = URL.createObjectURL(source);
     const img = new Image();
     await new Promise((resolve, reject) => {
       img.onload = resolve;
@@ -2079,18 +2129,24 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
     for (let i = 3; i < pixels.length; i += 4) {
       if (pixels[i] < 128) { transparent = true; break; }
     }
-    if (!transparent) {
+    if (!transparent && !manual) {
       status.textContent = 'กำลังเจาะช่องใส่รูปอัตโนมัติ…';
       // Allow the progress message to paint before processing the image.
       await new Promise(resolve => setTimeout(resolve, 0));
       const result = await cutoutFrameSlots(file, {
         onProgress: progress => { status.textContent = progress.message; }
       });
+      let processed = result.blob;
       if (!result.slotCount || !result.removedRatio || result.blob.type !== 'image/png') {
-        throw new Error('ไม่พบช่องใส่รูปที่เจาะได้ กรุณาใช้ JPG ที่มีช่องสีเรียบล้อมด้วยขอบกรอบ หรือ PNG ที่เจาะช่องโปร่งใสแล้ว');
+        status.textContent = 'ไม่พบช่องอัตโนมัติ กรุณาคลิกเจาะช่องเอง';
+        processed = await openCutoutPicker(file, true);
+        if (!processed) {
+          status.textContent = 'ยกเลิกการเพิ่มกรอบแล้ว';
+          return;
+        }
       }
       URL.revokeObjectURL(url);
-      url = URL.createObjectURL(result.blob);
+      url = URL.createObjectURL(processed);
       await new Promise((resolve, reject) => {
         img.onload = resolve;
         img.onerror = () => reject(new Error('ไม่สามารถอ่านกรอบหลังเจาะช่องได้'));
