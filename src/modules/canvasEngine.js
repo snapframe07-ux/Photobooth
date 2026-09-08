@@ -6,6 +6,8 @@
  * - Template Design JSON Serialization & Deserialization
  */
 
+import { applyPixelFilter, filteredSource } from './imageFilters.js';
+
 let targetCanvas = null;
 let ctx = null;
 let layers = [];
@@ -223,11 +225,13 @@ export async function captureFrame(videoEl, options = {}) {
     offCtx.scale(-1, 1);
   }
 
-  if (options.filter && options.filter !== 'none') {
+  const nativeFilter = 'filter' in offCtx;
+  if (nativeFilter && options.filter && options.filter !== 'none') {
     offCtx.filter = options.filter;
   }
 
   offCtx.drawImage(videoEl, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height);
+  if (!nativeFilter) applyPixelFilter(offscreen, options.filter);
 
   const baseLayer = {
     id: 'base-layer',
@@ -430,13 +434,15 @@ export function renderCanvas() {
     }
 
     // ฟิลเตอร์เก็บเป็นคุณสมบัติของ layer แทนการอบติดพิกเซลตอนถ่าย จะได้เปลี่ยนทีหลังได้
+    let source = layer.image;
     if (layer.filter && layer.filter !== 'none') {
-      ctx.filter = layer.filter;
+      if ('filter' in ctx) ctx.filter = layer.filter;
+      else source = filteredSource(layer.image, layer.filter);
     }
 
     const drawW = layer.width;
     const drawH = layer.height;
-    ctx.drawImage(layer.image, -drawW / 2, -drawH / 2, drawW, drawH);
+    ctx.drawImage(source, -drawW / 2, -drawH / 2, drawW, drawH);
 
     ctx.restore();
 
@@ -856,8 +862,48 @@ export function exportImage(format = 'image/png', quality = 0.92) {
 /**
  * Triggers direct image download.
  */
-export function downloadImage(filename = 'snapframe-photo.png', format = 'image/png') {
+export async function downloadImage(filename = 'snapframe-photo.png', format = 'image/png') {
   const dataUrl = exportImage(format);
+  return downloadDataUrl(dataUrl, filename, format);
+}
+
+export async function downloadDataUrl(dataUrl, filename = 'snapframe-photo.png', format = 'image/png') {
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (ios) {
+    // Convert synchronously so share() remains inside the button's user activation.
+    const bytes = Uint8Array.from(atob(dataUrl.split(',')[1]), c => c.charCodeAt(0));
+    const file = new File([bytes], filename, { type: format });
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+        return;
+      } catch (error) {
+        if (error.name === 'AbortError') return;
+      }
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-label', 'บันทึกรูปภาพ');
+    const card = document.createElement('div');
+    card.className = 'modal-card';
+    const hint = document.createElement('p');
+    hint.textContent = 'แตะรูปค้างไว้ แล้วเลือกบันทึกไปยังรูปภาพ';
+    const img = new Image();
+    img.src = dataUrl;
+    img.alt = 'ภาพถ่ายพร้อมกรอบ';
+    img.style.cssText = 'width:100%;height:auto;flex-shrink:0;-webkit-touch-callout:default;user-select:auto';
+    const close = document.createElement('button');
+    close.className = 'btn btn-secondary';
+    close.textContent = 'ปิด';
+    close.onclick = () => overlay.remove();
+    card.append(close, hint, img);
+    overlay.append(card);
+    document.body.append(overlay);
+    close.focus();
+    return;
+  }
   const link = document.createElement('a');
   link.href = dataUrl;
   link.download = filename;

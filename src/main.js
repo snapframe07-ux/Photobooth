@@ -1,6 +1,7 @@
 import './style.css';
 import { composePhotoStrip, getStripLayout } from './modules/photoStrip.js';
 import { getFrameLayout } from './modules/frameSlots.js';
+import { applyPixelFilter } from './modules/imageFilters.js';
 
 // Modules
 import {
@@ -26,6 +27,7 @@ import {
   serializeDesignData,
   loadTemplateDesign,
   downloadImage,
+  downloadDataUrl,
   exportImage,
   getLayers
 } from './modules/canvasEngine.js';
@@ -543,6 +545,16 @@ const btnSaveCustomSticker = document.querySelector('#btnSaveCustomSticker');
 
 const layerList = document.querySelector('#layerList');
 const sessionGalleryGrid = document.querySelector('#sessionGalleryGrid');
+sessionGalleryGrid.addEventListener('click', async event => {
+  const link = event.target.closest('a[download]');
+  if (!link) return;
+  event.preventDefault();
+  try {
+    await downloadDataUrl(link.href, link.download);
+  } catch (error) {
+    showError(`บันทึกรูปไม่สำเร็จ: ${error.message}`);
+  }
+});
 const galleryCount = document.querySelector('#galleryCount');
 
 const errorBanner = document.querySelector('#errorBanner');
@@ -1174,10 +1186,12 @@ function captureSingleFrame(filterOptions) {
     offCtx.translate(w, 0);
     offCtx.scale(-1, 1);
   }
-  if (filterOptions.filter && filterOptions.filter !== 'none') {
+  const nativeFilter = 'filter' in offCtx;
+  if (nativeFilter && filterOptions.filter && filterOptions.filter !== 'none') {
     offCtx.filter = filterOptions.filter;
   }
   offCtx.drawImage(videoElement, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, w, h);
+  if (!nativeFilter) applyPixelFilter(offscreen, filterOptions.filter);
   return offscreen;
 }
 
@@ -1916,9 +1930,13 @@ btnRetake?.addEventListener('click', () => {
   switchTab('camera');
 });
 
-btnExport?.addEventListener('click', () => {
-  downloadImage('snapframe-photo.png', 'image/png');
-  handleSaveToSessionGallery();
+btnExport?.addEventListener('click', async () => {
+  try {
+    await downloadImage('snapframe-photo.png', 'image/png');
+    handleSaveToSessionGallery();
+  } catch (error) {
+    showError(`บันทึกรูปไม่สำเร็จ: ${error.message}`);
+  }
 });
 
 btnSaveToGallery?.addEventListener('click', handleSaveToSessionGallery);
