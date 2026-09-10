@@ -1,5 +1,6 @@
 import './style.css';
 import { composePhotoStrip, getStripLayout } from './modules/photoStrip.js';
+import { serializeCaptureFrame, restoreCaptureFrame } from './modules/templateFrame.js';
 import { getFrameLayout } from './modules/frameSlots.js';
 import { applyPixelFilter } from './modules/imageFilters.js';
 
@@ -1814,12 +1815,15 @@ async function loadTemplateGallery() {
             orientation: design?.capture?.orientation === 'horizontal' ? 'horizontal' : 'vertical',
             aspect: ['4:3', '1:1', '16:9'].includes(design?.capture?.aspect) ? design.capture.aspect : currentAspectRatio
           };
+          const templateFrame = restoreCaptureFrame(design?.capture?.frame, count);
+          // Verify the saved decoration can be read before opening the camera.
+          if (templateFrame) await loadStripDecoration(templateFrame);
           await loadTemplateDesign(design);
           activeCaptureTemplate = { name: t.name, design, capture };
           activeBurstCount = count;
           stripOrientation = capture.orientation;
           currentAspectRatio = capture.aspect;
-          selectedStripFrame = null;
+          selectedStripFrame = templateFrame;
           hasChosenStrip = true;
           switchTab('camera');
         } catch (error) {
@@ -2082,6 +2086,8 @@ async function handleCapture() {
   let completed = false;
   try {
     const decoration = await loadStripDecoration();
+    const savedFrame = serializeCaptureFrame(selectedStripFrame, decoration,
+      frameLayout || getStripLayout(count, 960, aspect[0] / aspect[1], stripOrientation));
     const frames = [];
     for (let i = 1; i <= count; i++) {
       if (frameLayout) {
@@ -2102,7 +2108,7 @@ async function handleCapture() {
     getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id));
     setBaseLayerImage(strip);
     if (activeCaptureTemplate) await loadTemplateDesign(activeCaptureTemplate.design);
-    lastCaptureSettings = { count, orientation: stripOrientation, aspect: currentAspectRatio };
+    lastCaptureSettings = { count, orientation: stripOrientation, aspect: currentAspectRatio, frame: savedFrame };
     activeEditorFilter = 'none';
     renderEditorFilterRow();
     completed = true;
@@ -2119,14 +2125,14 @@ async function handleCapture() {
   }
 }
 
-function loadStripDecoration() {
-  if (!selectedStripFrame) return Promise.resolve(null);
+function loadStripDecoration(frame = selectedStripFrame) {
+  if (!frame) return Promise.resolve(null);
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('โหลดกรอบไม่สำเร็จ กรุณาเลือกกรอบใหม่แล้วลองอีกครั้ง'));
-    img.src = selectedStripFrame.src;
+    img.src = frame.src;
   });
 }
 
