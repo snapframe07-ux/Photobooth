@@ -118,6 +118,7 @@ let selectedStripFrame = FRAMES_CATALOG[0];
 let stripOrientation = 'vertical';
 let isCapturing = false;
 let hasChosenStrip = false;
+let activeCaptureTemplate = null;
 let isGridActive = false;
 let currentAspectRatio = '4:3';
 
@@ -1792,10 +1793,22 @@ async function loadTemplateGallery() {
       `;
       templateGrid.appendChild(card);
 
-      card.querySelector('.btn-load-tpl').addEventListener('click', async () => {
-        await loadTemplateDesign(t.design_data);
-        switchTab('editor');
-        alert(`📂 โหลดเทมเพลต "${t.name}" สำเร็จ!`);
+      card.querySelector('.btn-load-tpl').addEventListener('click', async event => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        hideError();
+        try {
+          // Validate and preload assets before entering the camera.
+          await loadTemplateDesign(t.design_data);
+          activeCaptureTemplate = { name: t.name, design: t.design_data };
+          selectedStripFrame = null;
+          hasChosenStrip = true;
+          switchTab('camera');
+        } catch (error) {
+          showError(`โหลดเทมเพลตไม่สำเร็จ: ${error.message}`);
+        } finally {
+          button.disabled = false;
+        }
       });
 
       const btnDel = card.querySelector('.btn-del-tpl');
@@ -1943,7 +1956,7 @@ btnSaveToGallery?.addEventListener('click', handleSaveToSessionGallery);
 
 function updateStripSummary() {
   const layout = selectedStripFrame?.layout;
-  document.querySelector('#stripCameraSummary').textContent = `${selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ภาพ${getStripDirectionLabel()}`;
+  document.querySelector('#stripCameraSummary').textContent = `${activeCaptureTemplate ? `เทมเพลต ${activeCaptureTemplate.name}` : selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ภาพ${getStripDirectionLabel()}`;
   btnAspectActive.disabled = !!layout;
   btnAspectArrow.disabled = !!layout;
   btnAspectActive.textContent = layout ? 'ตามกรอบ' : currentAspectRatio;
@@ -1982,7 +1995,7 @@ function renderStripSetup() {
     const label = document.createElement('span');
     label.textContent = frame?.name || 'ไม่ใช้กรอบ';
     button.append(label);
-    button.addEventListener('click', () => { selectedStripFrame = frame; renderStripSetup(); });
+    button.addEventListener('click', () => { activeCaptureTemplate = null; selectedStripFrame = frame; renderStripSetup(); });
     choices.append(button);
   });
   document.querySelector('#stripPreviewLabel').textContent = `${selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ภาพ${getStripDirectionLabel()}`;
@@ -2065,6 +2078,7 @@ async function handleCapture() {
     setTargetCanvas(canvasElement);
     getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id));
     setBaseLayerImage(strip);
+    if (activeCaptureTemplate) await loadTemplateDesign(activeCaptureTemplate.design);
     activeEditorFilter = 'none';
     renderEditorFilterRow();
     completed = true;
@@ -2180,6 +2194,7 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
     const layout = getFrameLayout(ctx.getImageData(0, 0, check.width, check.height));
     const frame = { id: `strip-${crypto.randomUUID()}`, name: file.name.replace(/\.[^.]+$/, ''), src: url, stripUpload: true, layout };
     FRAMES_CATALOG.unshift(frame);
+    activeCaptureTemplate = null;
     selectedStripFrame = frame;
     url = null; // Keep the object URL alive while this session uses the frame.
     renderStripSetup();
