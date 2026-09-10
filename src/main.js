@@ -119,6 +119,7 @@ let stripOrientation = 'vertical';
 let isCapturing = false;
 let hasChosenStrip = false;
 let activeCaptureTemplate = null;
+let lastCaptureSettings = null;
 let isGridActive = false;
 let currentAspectRatio = '4:3';
 
@@ -1116,6 +1117,7 @@ btnToolGrid?.addEventListener('click', () => {
 const BURST_STEPS = [1, 2, 3, 4];
 
 btnToolBurst?.addEventListener('click', () => {
+  if (activeCaptureTemplate || selectedStripFrame?.layout) return;
   const currentIdx = BURST_STEPS.indexOf(activeBurstCount);
   const nextIdx = (currentIdx + 1) % BURST_STEPS.length;
   activeBurstCount = BURST_STEPS[nextIdx];
@@ -1711,6 +1713,7 @@ saveTemplateForm.addEventListener('submit', async (e) => {
   const name = tplName.value.trim();
   const isShared = chkSharePublic.checked;
   const designData = serializeDesignData();
+  if (lastCaptureSettings) designData.capture = { ...lastCaptureSettings };
 
   try {
     await supabaseService.saveTemplate({
@@ -1798,9 +1801,24 @@ async function loadTemplateGallery() {
         button.disabled = true;
         hideError();
         try {
-          // Validate and preload assets before entering the camera.
-          await loadTemplateDesign(t.design_data);
-          activeCaptureTemplate = { name: t.name, design: t.design_data };
+          const design = typeof t.design_data === 'string' ? JSON.parse(t.design_data) : structuredClone(t.design_data);
+          let count = design?.capture?.count;
+          if (!Number.isInteger(count) || count < 1 || count > 4) {
+            const answer = prompt('เทมเพลตเก่านี้ยังไม่ระบุจำนวนภาพ ต้องการใช้กี่ภาพ (1–4)? ระบบจะล็อคจำนวนนี้ขณะใช้เทมเพลต บันทึกเทมเพลตใหม่เพื่อจำจำนวนไว้', '4');
+            if (answer === null) return;
+            count = Number(answer);
+            if (!Number.isInteger(count) || count < 1 || count > 4) throw new Error('กรุณาระบุจำนวนภาพเป็นเลข 1–4');
+          }
+          const capture = {
+            count,
+            orientation: design?.capture?.orientation === 'horizontal' ? 'horizontal' : 'vertical',
+            aspect: ['4:3', '1:1', '16:9'].includes(design?.capture?.aspect) ? design.capture.aspect : currentAspectRatio
+          };
+          await loadTemplateDesign(design);
+          activeCaptureTemplate = { name: t.name, design, capture };
+          activeBurstCount = count;
+          stripOrientation = capture.orientation;
+          currentAspectRatio = capture.aspect;
           selectedStripFrame = null;
           hasChosenStrip = true;
           switchTab('camera');
@@ -1956,6 +1974,10 @@ btnSaveToGallery?.addEventListener('click', handleSaveToSessionGallery);
 
 function updateStripSummary() {
   const layout = selectedStripFrame?.layout;
+  if (activeCaptureTemplate) activeBurstCount = activeCaptureTemplate.capture.count;
+  btnToolBurst.disabled = !!activeCaptureTemplate || !!layout;
+  btnToolBurst.title = activeCaptureTemplate ? 'จำนวนภาพถูกล็อคตามเทมเพลต' : 'ถ่ายภาพเรียงต่อกัน';
+  burstBadge.textContent = `${activeBurstCount}x`;
   document.querySelector('#stripCameraSummary').textContent = `${activeCaptureTemplate ? `เทมเพลต ${activeCaptureTemplate.name}` : selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ภาพ${getStripDirectionLabel()}`;
   btnAspectActive.disabled = !!layout;
   btnAspectArrow.disabled = !!layout;
@@ -1968,16 +1990,17 @@ function renderStripSetup() {
   const layout = selectedStripFrame?.layout;
   const orientationSelect = document.querySelector('#stripOrientation');
   orientationSelect.value = stripOrientation;
-  orientationSelect.disabled = !!layout;
+  orientationSelect.disabled = !!layout || !!activeCaptureTemplate;
   document.querySelector('#stripOrientationHint').textContent = layout
     ? 'กรอบนี้จัดภาพตามช่องที่กำหนดไว้ เลือกกรอบสำเร็จรูปเพื่อเปลี่ยนแนวการเรียงภาพ'
     : 'แนวนอนเรียงจากซ้ายไปขวา เมื่อเลือก 4 ภาพจะจัดเป็น 2 แถว แถวละ 2 ภาพ';
   if (layout) activeBurstCount = layout.slots.length;
+  if (activeCaptureTemplate) activeBurstCount = activeCaptureTemplate.capture.count;
   const countSelect = document.querySelector('#stripShotCount');
   countSelect.value = String(activeBurstCount);
-  countSelect.disabled = !!layout;
-  countSelect.title = layout ? 'จำนวนภาพตรงกับช่องที่ตรวจพบในกรอบ' : 'เลือกจำนวนภาพ';
-  btnToolBurst.disabled = !!layout;
+  countSelect.disabled = !!layout || !!activeCaptureTemplate;
+  countSelect.title = activeCaptureTemplate ? 'จำนวนภาพถูกล็อคตามเทมเพลต' : layout ? 'จำนวนภาพตรงกับช่องที่ตรวจพบในกรอบ' : 'เลือกจำนวนภาพ';
+  btnToolBurst.disabled = !!layout || !!activeCaptureTemplate;
   burstBadge.textContent = `${activeBurstCount}x`;
   const choices = document.querySelector('#stripFrameChoices');
   choices.replaceChildren();
@@ -2048,7 +2071,7 @@ async function handleCapture() {
   const controls = [...document.querySelectorAll('.nav-tabs button, #viewCamera button, #viewCamera input, #viewCamera select')];
   const disabledStates = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });
-  const count = activeBurstCount;
+  const count = activeCaptureTemplate?.capture.count || activeBurstCount;
   const frameLayout = selectedStripFrame?.layout || null;
   const aspect = currentAspectRatio.split(':').map(Number);
   const filterCss = FILTERS_CATALOG[activeFilterIndex].css;
@@ -2079,6 +2102,7 @@ async function handleCapture() {
     getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id));
     setBaseLayerImage(strip);
     if (activeCaptureTemplate) await loadTemplateDesign(activeCaptureTemplate.design);
+    lastCaptureSettings = { count, orientation: stripOrientation, aspect: currentAspectRatio };
     activeEditorFilter = 'none';
     renderEditorFilterRow();
     completed = true;
@@ -2118,6 +2142,7 @@ document.querySelector('#stripOrientation').addEventListener('change', event => 
 });
 
 document.querySelector('#stripShotCount').addEventListener('change', event => {
+  if (activeCaptureTemplate || selectedStripFrame?.layout) { renderStripSetup(); return; }
   activeBurstCount = Number(event.target.value);
   burstBadge.textContent = `${activeBurstCount}x`;
   renderStripSetup();
