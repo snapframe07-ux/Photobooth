@@ -1,7 +1,12 @@
+import { sharePhoto } from './modules/photoShare.js';
+import { FRAMES_CATALOG, STICKERS_CATALOG, FILTERS_CATALOG } from './data/catalogs.js';
+import { renderAppLayout } from './ui/appLayout.js';
+import { loadImageFromBlob } from './modules/imageLoader.js';
+import { bindCatalogDeleteButtons, loadSavedCatalog } from './ui/assetGallery.js';
 import './style.css';
 import { composePhotoStrip, getStripLayout } from './modules/photoStrip.js';
 import { serializeCaptureFrame, restoreCaptureFrame } from './modules/templateFrame.js';
-import { getFrameLayout } from './modules/frameSlots.js';
+import { getFrameLayout, clearFrameRectangle } from './modules/frameSlots.js';
 import { applyPixelFilter } from './modules/imageFilters.js';
 
 // Modules
@@ -37,68 +42,6 @@ import { removeBackground, cutoutFrameSlots, loadFrameCanvas, floodFillRegion } 
 import { supabaseService, isSupabaseConfigured } from './modules/supabaseService.js';
 import { appUI } from './ui/appUI.js';
 
-// Assets: 11 Frames
-import frameVintageGold from './assets/frames/vintage-gold.svg';
-import frameVintage from './assets/frames/vintage-frame.svg';
-import frameNeonCyber from './assets/frames/neon-cyber.svg';
-import frameFloralBloom from './assets/frames/floral-bloom.svg';
-import frameRetroFilm from './assets/frames/retro-film.svg';
-import frameCutePastel from './assets/frames/cute-pastel.svg';
-import frameBirthdayParty from './assets/frames/birthday-party.svg';
-import frameMinimalistBlack from './assets/frames/minimalist-black.svg';
-import frameComicPop from './assets/frames/comic-pop.svg';
-import frameLoveRomance from './assets/frames/love-romance.svg';
-import frameFestiveSparkle from './assets/frames/festive-sparkle.svg';
-
-// Assets: 10 Stickers
-import stickerStar from './assets/stickers/star.svg';
-import stickerHeart from './assets/stickers/heart.svg';
-import stickerCrown from './assets/stickers/crown.svg';
-import stickerSunglasses from './assets/stickers/sunglasses.svg';
-import stickerSparkles from './assets/stickers/sparkles.svg';
-import stickerCatEars from './assets/stickers/cat-ears.svg';
-import stickerFire from './assets/stickers/fire.svg';
-import stickerSpeechBubble from './assets/stickers/speech-bubble.svg';
-import stickerPartyHat from './assets/stickers/party-hat.svg';
-import stickerRibbonBow from './assets/stickers/ribbon-bow.svg';
-
-const FRAMES_CATALOG = [
-  { id: 'vintage-gold', name: 'Vintage Gold', src: frameVintageGold },
-  { id: 'vintage-classic', name: 'Vintage Classic', src: frameVintage },
-  { id: 'neon-cyber', name: 'Neon Cyberpunk', src: frameNeonCyber },
-  { id: 'floral-bloom', name: 'Floral Bloom', src: frameFloralBloom },
-  { id: 'retro-film', name: 'Retro 35mm Film', src: frameRetroFilm },
-  { id: 'cute-pastel', name: 'Cute Pastel', src: frameCutePastel },
-  { id: 'birthday-party', name: 'Party Festival', src: frameBirthdayParty },
-  { id: 'minimalist-black', name: 'Minimalist Black', src: frameMinimalistBlack },
-  { id: 'comic-pop', name: 'Comic Pop Art', src: frameComicPop },
-  { id: 'love-romance', name: 'Love & Romance', src: frameLoveRomance },
-  { id: 'festive-sparkle', name: 'Festive Sparkle', src: frameFestiveSparkle }
-];
-
-let STICKERS_CATALOG = [
-  { id: 'star', name: 'Star', src: stickerStar },
-  { id: 'heart', name: 'Heart', src: stickerHeart },
-  { id: 'crown', name: 'Crown', src: stickerCrown },
-  { id: 'sunglasses', name: 'Cool Glasses', src: stickerSunglasses },
-  { id: 'sparkles', name: 'Magic Sparkles', src: stickerSparkles },
-  { id: 'cat-ears', name: 'Cat Ears', src: stickerCatEars },
-  { id: 'fire', name: 'Lit Fire', src: stickerFire },
-  { id: 'speech-bubble', name: 'Snap Bubble', src: stickerSpeechBubble },
-  { id: 'party-hat', name: 'Party Hat', src: stickerPartyHat },
-  { id: 'ribbon-bow', name: 'Red Ribbon', src: stickerRibbonBow }
-];
-
-const FILTERS_CATALOG = [
-  { id: 'classic', name: 'Classic', css: 'none', class: 'swatch-classic' },
-  { id: 'sunlit', name: 'Sunlit', css: 'sepia(0.35) saturate(1.4) brightness(1.05)', class: 'swatch-sunlit' },
-  { id: 'frost', name: 'Frost', css: 'hue-rotate(180deg) saturate(1.2) brightness(1.1)', class: 'swatch-frost' },
-  { id: 'noir', name: 'Noir', css: 'grayscale(1) contrast(1.2) brightness(0.95)', class: 'swatch-noir' },
-  { id: 'vivid', name: 'Vivid', css: 'saturate(1.8) contrast(1.1)', class: 'swatch-vivid' },
-  { id: 'warm', name: 'Warm', css: 'sepia(0.2) saturate(1.3) hue-rotate(-10deg)', class: 'swatch-warm' },
-  { id: 'vintage', name: 'Vintage', css: 'sepia(0.5) contrast(1.15) brightness(0.9)', class: 'swatch-vintage' }
-];
-
 let currentUser = null;
 let lastUploadedStickerBlob = null;
 let lastUploadedStickerUrl = null;
@@ -118,6 +61,7 @@ let activeBurstCount = 4;
 let selectedStripFrame = FRAMES_CATALOG[0];
 let stripOrientation = 'vertical';
 let isCapturing = false;
+let isChangingCamera = false;
 let hasChosenStrip = false;
 let activeCaptureTemplate = null;
 let lastCaptureSettings = null;
@@ -125,352 +69,7 @@ let isGridActive = false;
 let currentAspectRatio = '4:3';
 
 // Application Layout
-document.querySelector('#app').innerHTML = `
-  <header class="app-header">
-    <div class="logo-title">
-      <span class="logo-icon">📸</span>
-      <h2>SnapFrame</h2>
-      <div class="auth-box">
-        <span class="guest-badge" id="userBadge">Guest Mode</span>
-        <button class="btn btn-sm btn-secondary" id="btnAuthModal">🔑 เข้าสู่ระบบ</button>
-      </div>
-    </div>
-    <nav class="nav-tabs">
-      <button class="nav-btn active" id="tabSetup">🖼️ เลือกกรอบ</button>
-      <button class="nav-btn" id="tabCamera"><span class="nav-ico">📷</span><span class="nav-label">ถ่ายภาพ</span></button>
-      <button class="nav-btn" id="tabEditor"><span class="nav-ico">🎨</span><span class="nav-label">ตกแต่ง</span></button>
-      <button class="nav-btn" id="tabTemplateGallery"><span class="nav-ico">📁</span><span class="nav-label">เทมเพลต</span></button>
-      <button class="nav-btn" id="tabGallery"><span class="nav-ico">🖼️</span><span class="nav-label">คลังภาพ (<span id="galleryCount">0</span>)</span></button>
-    </nav>
-  </header>
-
-  <main class="main-content">
-    <!-- Status & Alerts -->
-    <div class="status-bar">
-      <div class="status-badge" id="cameraStatus">
-        <span class="dot"></span>
-        <span id="statusText">เตรียมพร้อมถ่ายภาพ</span>
-      </div>
-    </div>
-
-    <div class="alert-error hidden" id="errorBanner">
-      <span class="error-icon">⚠️</span>
-      <span id="errorMessage"></span>
-    </div>
-
-    <!-- View 1: Photobooth Studio Camera View (Figma Redesign) -->
-    <section class="view-section" id="viewSetup">
-      <div class="view-card strip-setup">
-        <div class="strip-options">
-          <p class="strip-step">1 เลือกกรอบ → 2 ถ่ายภาพ → 3 ดาวน์โหลด</p>
-          <h1>เลือกกรอบให้ Photo Strip ของคุณ</h1>
-          <p>ถ่ายทีละช็อต แล้วเรียงภาพจากบนลงล่างในกรอบที่เลือก</p>
-          <div id="stripFrameChoices" class="strip-frame-choices" aria-label="เลือกกรอบรูป"></div>
-          <label for="stripCutoutMode">วิธีเจาะช่องกรอบที่เพิ่มเอง</label>
-          <select id="stripCutoutMode"><option value="auto">ตรวจหาและเจาะอัตโนมัติ</option><option value="manual">เจาะช่องเองด้วยการคลิก</option></select>
-          <label class="btn btn-secondary" for="stripFrameUpload">＋ เพิ่มกรอบเอง</label>
-          <input id="stripFrameUpload" type="file" accept="image/png,image/webp,image/jpeg,.jpg,.jpeg" class="hidden-input" />
-          <p id="stripUploadStatus" role="status">รองรับ PNG, WebP และ JPG/JPEG ระบบจะลองเจาะช่องสีเรียบในกรอบที่ไม่มีความโปร่งใสให้ ตรวจตัวอย่างก่อนถ่าย กรอบใช้ได้ในรอบการเปิดเว็บนี้</p>
-          <label for="stripOrientation">การเรียงภาพในกรอบ</label>
-          <select id="stripOrientation" aria-describedby="stripOrientationHint"><option value="vertical">แนวตั้ง (บนลงล่าง)</option><option value="horizontal">แนวนอน (4 ภาพจัดแบบ 2×2)</option></select>
-          <p id="stripOrientationHint">แนวนอนเรียงจากซ้ายไปขวา เมื่อเลือก 4 ภาพจะจัดเป็น 2 แถว แถวละ 2 ภาพ</p>
-          <label for="stripShotCount">จำนวนภาพในแถบ</label>
-          <select id="stripShotCount"><option value="1">1 ภาพ</option><option value="2">2 ภาพ</option><option value="3">3 ภาพ</option><option value="4" selected>4 ภาพ</option></select>
-          <button class="btn btn-primary btn-large" id="btnBeginStrip">ใช้กรอบนี้ · ไปถ่ายภาพ →</button>
-        </div>
-        <div class="strip-preview-wrap">
-          <p id="stripPreviewLabel" aria-live="polite"></p>
-          <div id="stripPreview" class="strip-preview" aria-label="ตัวอย่างรูปเรียงแนวตั้ง"></div>
-          <small>กรอบเดียวคลุมทั้งแถบ ภาพเรียงจากบนลงล่าง</small>
-        </div>
-      </div>
-    </section>
-    <section class="view-section hidden" id="viewCamera">
-      <div class="cam-studio-card">
-        <div class="cam-header-title"><span id="stripCameraSummary"></span> <button class="btn btn-secondary btn-sm" id="btnChangeStripFrame">เปลี่ยนกรอบ</button></div>
-
-        <div class="cam-studio-wrapper">
-          <!-- Film Holes Left & Right -->
-          <div class="film-side-holes left">
-            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
-            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
-            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
-          </div>
-
-          <div class="film-side-holes right">
-            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
-            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
-            <div class="film-hole"></div><div class="film-hole"></div><div class="film-hole"></div>
-          </div>
-
-          <!-- Main Workspace Grid -->
-          <div class="cam-workspace">
-            <!-- Left Panel -->
-            <div class="cam-left-panel">
-              <!-- Aspect Ratio Selector -->
-              <div class="aspect-ratio-group">
-                <span class="panel-label">สัดส่วน</span>
-                <button class="btn-aspect-opt active" id="btnAspectActive" title="กดเปลี่ยนอัตราส่วนภาพ">4:3</button>
-                <button class="btn-arrow-toggle" id="btnAspectArrow" title="กดเปลี่ยนอัตราส่วนภาพ">▼</button>
-              </div>
-
-              <!-- Filter Swatches (3 visible at a time) -->
-              <div class="filter-group">
-                <span class="panel-label">ฟิลเตอร์</span>
-                <select id="cameraFilterSelect" aria-label="เลือกฟิลเตอร์"></select>
-                <button class="btn-arrow-toggle" id="btnFilterUp">▲</button>
-                <div class="filter-carousel-viewport">
-                  <div class="filter-carousel-track" id="filterCarouselTrack">
-                    <!-- Filter items populated dynamically -->
-                  </div>
-                </div>
-                <button class="btn-arrow-toggle" id="btnFilterDown">▼</button>
-              </div>
-            </div>
-
-            <!-- Center Preview Area -->
-            <div class="cam-center-area">
-              <div class="cam-preview-box" id="previewBox" style="aspect-ratio: 4 / 3;">
-                <video id="webcam" autoplay playsinline muted class="mirror"></video>
-
-                <!-- Grid 3x3 Overlay -->
-                <div class="cam-grid-overlay" id="camGridOverlay">
-                  <div class="cam-grid-cell"></div><div class="cam-grid-cell"></div><div class="cam-grid-cell"></div>
-                  <div class="cam-grid-cell"></div><div class="cam-grid-cell"></div><div class="cam-grid-cell"></div>
-                  <div class="cam-grid-cell"></div><div class="cam-grid-cell"></div><div class="cam-grid-cell"></div>
-                </div>
-
-                <!-- Countdown Overlay -->
-                <div class="countdown-overlay" id="countdownOverlay">
-                  <span class="countdown-number" id="countdownNumber">3</span>
-                </div>
-
-                <!-- Zoom Ruler Bar -->
-                <div class="zoom-ruler-bar">
-                  <span class="zoom-icon">🔍-</span>
-                  <div class="zoom-ruler-track">
-                    <input type="range" class="zoom-ruler-input" id="zoomSlider" min="1" max="3" step="0.1" value="1">
-                  </div>
-                  <span class="zoom-icon">🔍+</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Right Panel -->
-            <div class="cam-right-panel">
-              <!-- Timer Selector -->
-              <div class="timer-group">
-                <span class="panel-label">ตั้งเวลา</span>
-                <button class="btn-timer-opt active" id="btnTimerActive">3s</button>
-                <button class="btn-arrow-toggle" id="btnTimerArrow">▼</button>
-              </div>
-
-              <!-- Brightness Slider -->
-              <div class="brightness-group">
-                <span class="panel-label">ความสว่าง</span>
-                <span class="brightness-icon">☀️</span>
-                <div class="brightness-slider-wrap">
-                  <input type="range" class="brightness-input" id="brightnessSlider" aria-label="ความสว่าง" min="0.5" max="1.5" step="0.05" value="1">
-                </div>
-                <span class="brightness-icon">🔆</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Bottom Film Strip Toolbar -->
-          <div class="cam-bottom-filmstrip">
-            <div class="film-holes-horizontal">
-              <div class="film-hole-h"></div><div class="film-hole-h"></div><div class="film-hole-h"></div>
-              <div class="film-hole-h"></div><div class="film-hole-h"></div><div class="film-hole-h"></div>
-            </div>
-
-            <div class="cam-toolbar">
-              <!-- Burst Mode Button -->
-              <button class="btn-tool-icon" id="btnToolBurst" title="ถ่ายภาพเรียงต่อกัน">
-                🎞️
-                <span class="tool-label">ต่อเนื่อง</span>
-                <span class="badge-count" id="burstBadge">4x</span>
-              </button>
-
-              <!-- Shutter / Capture Button (อยู่ตรงกลางแถบ) -->
-              <button class="btn-shutter-rec" id="btnCapture" title="ถ่ายภาพ">
-                <div class="shutter-inner-dot"></div>
-              </button>
-
-              <!-- Grid Overlay Button -->
-              <button class="btn-tool-icon" id="btnToolGrid" title="เปิด/ปิด Grid">
-                #
-                <span class="tool-label">เส้นกริด</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- View 2: Photo Decorator View -->
-    <section class="view-section hidden" id="viewEditor">
-      <div class="view-card">
-        <div class="canvas-container">
-          <canvas id="photoCanvas" width="1280" height="720"></canvas>
-        </div>
-
-        <div class="editor-filter-box">
-          <h4>🎞️ ฟิลเตอร์ภาพ (เปลี่ยนได้หลังถ่าย)</h4>
-          <div class="scroll-gallery" id="editorFilterRow"></div>
-        </div>
-
-        <div class="editor-actions">
-          <button class="btn btn-primary btn-large" id="btnExport">💾 ดาวน์โหลดภาพถ่าย</button>
-          <div class="editor-sub-actions">
-            <button class="btn btn-secondary" id="btnSaveTemplate">☁️ บันทึกเป็นเทมเพลต Supabase</button>
-            <button class="btn btn-secondary" id="btnSaveToGallery">🖼️ บันทึกเข้าคลังภาพเซสชัน</button>
-            <button class="btn btn-danger" id="btnRetake">📸 ถ่ายใหม่</button>
-          </div>
-        </div>
-
-        <!-- Scrollable Asset Galleries -->
-        <div class="asset-selector-box">
-          <div class="asset-tabs">
-            <button class="asset-tab-btn active" id="tabStickers">⭐ สติกเกอร์ (<span id="stickerTabCount">${STICKERS_CATALOG.length}</span>)</button>
-            <button class="asset-tab-btn" id="tabUpload">📤 อัปโหลด AI</button>
-          </div>
-
-          <!-- แถบความคืบหน้า: ใช้ร่วมกันระหว่างอัปโหลดกรอบ (แท็บกรอบรูป) และอัปโหลดสติกเกอร์ (แท็บอัปโหลด)
-               ถ้าอยู่ใน #galleryUpload จะถูกซ่อนตอนอยู่แท็บกรอบรูป -->
-          <div class="progress-container hidden" id="progressContainer">
-            <div class="progress-bar-bg">
-              <div class="progress-bar-fill" id="progressBarFill" style="width: 0%"></div>
-            </div>
-            <span class="progress-text" id="progressText">กำลังประมวลผล...</span>
-          </div>
-
-          <div class="scroll-gallery" id="galleryStickers"></div>
-
-          <div class="upload-gallery-box hidden" id="galleryUpload">
-            <label class="upload-dropzone">
-              <span>📤 อัปโหลดสติกเกอร์ (JPG/PNG)</span>
-              <input type="file" id="stickerUploader" accept="image/*" class="hidden-input">
-            </label>
-
-            <label class="checkbox-label">
-              <input type="checkbox" id="chkRemoveBg" checked>
-              <span>ตัดพื้นหลังอัตโนมัติ (MediaPipe AI + Smart Color Key)</span>
-            </label>
-
-            <!-- Save Custom Sticker Button -->
-            <button class="btn btn-sm btn-secondary hidden" id="btnSaveCustomSticker">💾 บันทึกสติกเกอร์นี้ลงคลังเพื่อใช้ซ้ำ</button>
-          </div>
-        </div>
-
-        <div class="layer-manager-box">
-          <h4>รายการ Layer ในภาพ:</h4>
-          <div id="layerList" class="layer-list"></div>
-        </div>
-      </div>
-    </section>
-
-    <!-- View 3: Template Gallery -->
-    <section class="view-section hidden" id="viewTemplateGallery">
-      <div class="view-card">
-        <h3>📁 คลังเทมเพลตกรอบรูปและสติกเกอร์ (Supabase)</h3>
-        <p class="subtitle">เลือกโหลดเทมเพลตของคุณหรือเทมเพลตสาธารณะที่คนอื่นแชร์มาใช้งานได้ทันที</p>
-
-        <div class="template-subtabs">
-          <button class="btn btn-sm btn-secondary active" id="tabMyTemplates">👤 เทมเพลตของฉัน</button>
-          <button class="btn btn-sm btn-secondary" id="tabSharedTemplates">🌐 เทมเพลตสาธารณะที่แชร์</button>
-        </div>
-
-        <div class="template-grid" id="templateGrid"></div>
-      </div>
-    </section>
-
-    <!-- View 4: Session Photo Gallery -->
-    <section class="view-section hidden" id="viewGallery">
-      <div class="view-card">
-        <h3>🖼️ คลังรูปภาพถ่ายในเซสชันนี้</h3>
-        <p class="subtitle">ภาพทั้งหมดถูกบันทึกไว้ในหน่วยความจำเซสชันแบบส่วนตัว</p>
-
-        <div class="session-gallery-grid" id="sessionGalleryGrid"></div>
-      </div>
-    </section>
-  </main>
-
-  <!-- Auth Modal -->
-  <div class="modal-overlay hidden" id="authModal">
-    <div class="modal-card">
-      <button class="btn-close" id="btnCloseAuthModal">✖️</button>
-      <h3 id="authModalTitle">🔑 เข้าสู่ระบบ SnapFrame</h3>
-      
-      <form id="authForm" class="form-box">
-        <label>
-          <span>อีเมล (Email)</span>
-          <input type="email" id="authEmail" required placeholder="user@example.com">
-        </label>
-
-        <label>
-          <span>รหัสผ่าน (Password)</span>
-          <input type="password" id="authPassword" required minlength="6" placeholder="••••••••">
-        </label>
-
-        <button type="submit" class="btn btn-primary btn-large" id="btnSubmitAuth">เข้าสู่ระบบ</button>
-      </form>
-
-      <div class="auth-toggle">
-        <span id="authToggleText">ยังไม่มีบัญชีสมาชิก?</span>
-        <button type="button" class="btn-link" id="btnToggleAuthMode">สมัครสมาชิกใหม่</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Save Template Modal -->
-  <div class="modal-overlay hidden" id="saveTemplateModal">
-    <div class="modal-card">
-      <button class="btn-close" id="btnCloseTemplateModal">✖️</button>
-      <h3>☁️ บันทึกตำแหน่งเป็นเทมเพลต (Supabase)</h3>
-      <p class="subtitle">ระบบจะบันทึกเฉพาะตำแหน่ง/ขนาดสติกเกอร์และกรอบรูป (ไม่มีการอัปโหลดรูปภาพส่วนตัว)</p>
-
-      <form id="saveTemplateForm" class="form-box">
-        <label>
-          <span>ชื่อเทมเพลต</span>
-          <input type="text" id="tplName" required placeholder="เช่น ปาร์ตี้วันเกิด 2026">
-        </label>
-
-        <label class="checkbox-label">
-          <input type="checkbox" id="chkSharePublic">
-          <span>แชร์เทมเพลตนี้ให้คนอื่นใช้งาน (Public Template)</span>
-        </label>
-
-        <button type="submit" class="btn btn-primary btn-large">บันทึกเทมเพลตลง Supabase</button>
-      </form>
-    </div>
-  </div>
-
-  <!-- Manual Frame Slot Cutout -->
-  <div class="modal-overlay hidden" id="frameCutoutModal">
-    <div class="modal-card cutout-card">
-      <button class="btn-close" id="btnCloseCutoutModal">✖️</button>
-      <h3>✂️ เจาะช่องใส่รูปเอง</h3>
-      <p class="subtitle">คลิกบนช่องที่ต้องการเจาะให้โปร่งใส คลิกได้หลายช่อง — พื้นตารางคือส่วนที่โปร่งแล้ว</p>
-
-      <div class="cutout-stage">
-        <canvas id="frameCutoutCanvas"></canvas>
-      </div>
-
-      <label class="cutout-tolerance">
-        <span>ความไว: <b id="cutoutToleranceValue">30</b></span>
-        <input type="range" id="cutoutTolerance" min="10" max="90" step="5" value="30">
-      </label>
-
-      <div class="cutout-actions">
-        <button class="btn btn-sm btn-secondary" id="btnCutoutReset">↩️ ล้างทั้งหมด</button>
-        <button class="btn btn-sm btn-danger" id="btnCutoutCancel">ยกเลิก</button>
-        <button class="btn btn-sm btn-primary" id="btnCutoutApply">ใช้กรอบนี้</button>
-      </div>
-      <p id="cutoutStatus" role="status"></p>
-    </div>
-  </div>
-`;
+document.querySelector('#app').innerHTML = renderAppLayout(STICKERS_CATALOG.length);
 
 // DOM Elements
 const tabCamera = document.querySelector('#tabCamera');
@@ -657,26 +256,11 @@ function renderStickerGallery() {
     </div>
   `).join('');
 
-  galleryStickers.querySelectorAll('.btn-item-del').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const id = e.currentTarget.dataset.del;
-      const item = STICKERS_CATALOG.find(s => s.id === id);
-      if (!confirm(`ลบสติกเกอร์ "${item ? item.name : id}" ออกจากคลัง?`)) return;
-
-      const idx = STICKERS_CATALOG.findIndex(s => s.id === id);
-      if (idx >= 0) STICKERS_CATALOG.splice(idx, 1);
-      renderStickerGallery();
-
-      if (currentUser && isSupabaseConfigured) {
-        try {
-          await supabaseService.deleteSticker(id);
-        } catch (err) {
-          console.warn('ลบสติกเกอร์บน Supabase ไม่สำเร็จ:', err.message);
-          showError(`ลบสติกเกอร์ออกจาก Supabase ไม่สำเร็จ: ${err.message}`);
-        }
-      }
-    });
+  bindCatalogDeleteButtons(galleryStickers, STICKERS_CATALOG, {
+    label: 'สติกเกอร์',
+    render: renderStickerGallery,
+    deleteRemote: id => currentUser && isSupabaseConfigured ? supabaseService.deleteSticker(id) : null,
+    showError
   });
 
   galleryStickers.querySelectorAll('.sticker-item').forEach(item => {
@@ -726,26 +310,11 @@ function renderFrameGallery() {
   `;
 
   // ปุ่มลบขึ้นเฉพาะกรอบที่ผู้ใช้อัปโหลดเอง ของที่ติดมากับแอปลบไม่ได้
-  galleryFrames.querySelectorAll('.btn-item-del').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const id = e.currentTarget.dataset.del;
-      const item = FRAMES_CATALOG.find(f => f.id === id);
-      if (!confirm(`ลบกรอบ "${item ? item.name : id}" ออกจากคลัง?`)) return;
-
-      const idx = FRAMES_CATALOG.findIndex(f => f.id === id);
-      if (idx >= 0) FRAMES_CATALOG.splice(idx, 1);
-      renderFrameGallery();
-
-      if (currentUser && isSupabaseConfigured) {
-        try {
-          await supabaseService.deleteFrame(id);
-        } catch (err) {
-          console.warn('ลบกรอบบน Supabase ไม่สำเร็จ:', err.message);
-          showError(`ลบกรอบออกจาก Supabase ไม่สำเร็จ: ${err.message}`);
-        }
-      }
-    });
+  bindCatalogDeleteButtons(galleryFrames, FRAMES_CATALOG, {
+    label: 'กรอบ',
+    render: renderFrameGallery,
+    deleteRemote: id => currentUser && isSupabaseConfigured ? supabaseService.deleteFrame(id) : null,
+    showError
   });
 
   galleryFrames.querySelector('#btnRemoveFrame').addEventListener('click', () => {
@@ -797,53 +366,31 @@ function renderEditorFilterRow() {
   });
 }
 
-async function loadSavedFramesFromSupabase() {
+function loadSavedFramesFromSupabase() {
   if (!isSupabaseConfigured) return;
-  try {
-    const frames = await supabaseService.getFrames();
-    if (frames && frames.length > 0) {
-      frames.forEach(fr => {
-        if (!FRAMES_CATALOG.some(f => f.id === fr.frame_id)) {
-          FRAMES_CATALOG.unshift({
-            id: fr.frame_id,
-            name: fr.name || 'กรอบบันทึก',
-            src: fr.image_url
-          });
-        }
-      });
-      renderFrameGallery();
-    }
-  } catch (e) {
-    console.warn('Could not load frames from Supabase:', e.message);
-  }
+  return loadSavedCatalog(FRAMES_CATALOG, {
+    fetchRecords: () => supabaseService.getFrames(),
+    idKey: 'frame_id',
+    fallbackName: 'กรอบบันทึก',
+    render: renderFrameGallery
+  });
 }
 
-async function loadSavedStickersFromSupabase() {
+function loadSavedStickersFromSupabase() {
   if (!isSupabaseConfigured) return;
-  try {
-    const stickers = await supabaseService.getStickers();
-    if (stickers && stickers.length > 0) {
-      stickers.forEach(st => {
-        if (!STICKERS_CATALOG.some(s => s.id === st.sticker_id)) {
-          STICKERS_CATALOG.unshift({
-            id: st.sticker_id,
-            name: st.name || 'สติกเกอร์บันทึก',
-            src: st.image_url
-          });
-        }
-      });
-      renderStickerGallery();
-    }
-  } catch (e) {
-    console.warn('Could not load stickers from Supabase:', e.message);
-  }
+  return loadSavedCatalog(STICKERS_CATALOG, {
+    fetchRecords: () => supabaseService.getStickers(),
+    idKey: 'sticker_id',
+    fallbackName: 'สติกเกอร์บันทึก',
+    render: renderStickerGallery
+  });
 }
 
 /**
  * Tab Navigation
  */
 function switchTab(tabName) {
-  if (isCapturing) return;
+  if (isCapturing || isChangingCamera) return;
   if (tabName === 'camera' && !hasChosenStrip) tabName = 'setup';
   if (tabName === 'editor' && !getLayers().some(layer => layer.type === 'base')) {
     showError('เลือกกรอบและถ่ายภาพก่อนดูรูปที่ได้');
@@ -1132,6 +679,9 @@ btnToolBurst?.addEventListener('click', () => {
  * Camera Actions (Updated with Realtime Filters, Timer, & Burst Mode)
  */
 async function handleStartCamera() {
+  if (isChangingCamera) return;
+  isChangingCamera = true;
+  btnSwitch.disabled = true;
   hideError();
   try {
     await initCamera(videoElement);
@@ -1146,6 +696,9 @@ async function handleStartCamera() {
   } catch (error) {
     showError(error.message);
     updateStatus(false, 'ไม่สามารถเปิดกล้องได้');
+  } finally {
+    isChangingCamera = false;
+    btnSwitch.disabled = false;
   }
 }
 
@@ -1156,6 +709,8 @@ function handleStopCamera() {
 }
 
 async function handleSwitchCamera() {
+  if (isCapturing || isChangingCamera) return;
+  isChangingCamera = true;
   hideError();
   if (btnSwitch) btnSwitch.disabled = true;
   try {
@@ -1167,7 +722,11 @@ async function handleSwitchCamera() {
   } catch (error) {
     showError(error.message);
   } finally {
+    isChangingCamera = false;
     if (btnSwitch) btnSwitch.disabled = false;
+    updateMirrorState();
+    usingCssZoom = true;
+    applyLiveStreamFilters();
   }
 }
 
@@ -1209,15 +768,6 @@ function captureSingleFrame(filterOptions) {
 // ค่า alpha ที่ยังถือว่า "ทึบ"
 const FRAME_OPAQUE_ALPHA = 250;
 
-function loadImageFromBlob(blob) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('อ่านไฟล์ภาพไม่ได้')); };
-    img.src = url;
-  });
-}
 
 /**
  * ตรวจพื้นที่กลางภาพ (40% ตรงกลาง) ว่าโปร่งใสพอจะเป็นช่องใส่รูปหรือยัง
@@ -1301,13 +851,14 @@ async function openCutoutPicker(source, requireSlots = false) {
     imageData,
     original: new Uint8ClampedArray(imageData.data),
     requireSlots,
+    firstCorner: null,
     resolve: null
   };
 
   frameCutoutCanvas.width = w;
   frameCutoutCanvas.height = h;
-  document.querySelector('#cutoutStatus').textContent = requireSlots
-    ? 'คลิกพื้นที่สีเรียบภายในช่องภาพ 1–4 ช่อง ปรับความไวหากเจาะไม่ครบ หรือล้างทั้งหมดเพื่อเริ่มใหม่' : '';
+  document.querySelector('#cutoutSelectionMode').value = 'rectangle';
+  document.querySelector('#cutoutStatus').textContent = 'แตะมุมแรกและมุมตรงข้ามของช่องภาพ เก็บลายกรอบหรือข้อความไว้นอกช่อง ทำซ้ำได้ 1–4 ช่อง หรือเลือกวิธีลบตามสีสำหรับพื้นสีเขียว';
   drawCutoutPreview();
   frameCutoutModal.classList.remove('hidden');
 
@@ -1331,18 +882,33 @@ frameCutoutCanvas?.addEventListener('click', (e) => {
   const y = Math.floor((e.clientY - rect.top) * (h / rect.height));
   if (x < 0 || y < 0 || x >= w || y >= h) return;
 
+  if (document.querySelector('#cutoutSelectionMode').value === 'rectangle') {
+    const status = document.querySelector('#cutoutStatus');
+    if (!cutoutState.firstCorner) {
+      cutoutState.firstCorner = { x, y };
+      status.textContent = 'เลือกมุมแรกแล้ว แตะมุมตรงข้ามเพื่อเจาะช่องภาพ';
+      const context = frameCutoutCanvas.getContext('2d');
+      context.strokeStyle = '#ff0066';
+      context.lineWidth = Math.max(2, w / 300);
+      context.strokeRect(x - 6, y - 6, 12, 12);
+      return;
+    }
+    try {
+      clearFrameRectangle(imageData, cutoutState.firstCorner, { x, y });
+      status.textContent = 'เจาะช่องแล้ว เลือกสองมุมเพื่อเพิ่มช่อง หรือกดใช้กรอบนี้';
+    } catch (error) {
+      status.textContent = error.message;
+    }
+    cutoutState.firstCorner = null;
+    drawCutoutPreview();
+    return;
+  }
   const idx = y * w + x;
   if (imageData.data[idx * 4 + 3] === 0) return; // ตรงนี้โปร่งอยู่แล้ว
 
   const base = parseInt(cutoutTolerance.value, 10) || 30;
 
-  // กันรั่ว: ถ้าบริเวณที่ได้ไหลจนแตะขอบภาพและกินพื้นที่มาก แปลว่าหลุดออกนอกช่องไปแล้ว
-  // จึงไล่ลด tolerance ลงจนกว่าจะได้บริเวณที่อยู่ในช่องจริง (ตรรกะเดียวกับตัวตรวจอัตโนมัติ)
-  let region = floodFillRegion(imageData.data, w, h, idx, base);
-  for (const factor of [0.7, 0.5, 0.35, 0.25]) {
-    if (!(region.touchesEdge && region.area / (w * h) > 0.3)) break;
-    region = floodFillRegion(imageData.data, w, h, idx, base * factor);
-  }
+  const region = floodFillRegion(imageData.data, w, h, idx, base);
 
   for (const p of region.pixels) imageData.data[p * 4 + 3] = 0;
   drawCutoutPreview();
@@ -1354,6 +920,7 @@ cutoutTolerance?.addEventListener('input', (e) => {
 
 btnCutoutReset?.addEventListener('click', () => {
   if (!cutoutState) return;
+  cutoutState.firstCorner = null;
   cutoutState.imageData.data.set(cutoutState.original);
   drawCutoutPreview();
 });
@@ -1366,7 +933,7 @@ btnCutoutApply?.addEventListener('click', async () => {
   const { work, workCtx, imageData } = cutoutState;
   if (cutoutState.requireSlots) {
     try {
-      getFrameLayout(imageData);
+      getFrameLayout(imageData, { allowEdgeSlots: true });
     } catch (error) {
       document.querySelector('#cutoutStatus').textContent = error.message;
       return;
@@ -1549,12 +1116,14 @@ btnSaveCustomSticker.addEventListener('click', async () => {
 
   const stickerName = prompt('ตั้งชื่อสติกเกอร์ที่ต้องการบันทึก:', 'สติกเกอร์ส่วนตัว') || 'สติกเกอร์ส่วนตัว';
   let finalUrl = lastUploadedStickerUrl;
+  let stickerId = `custom-${Date.now()}`;
 
   if (currentUser && isSupabaseConfigured && lastUploadedStickerBlob) {
     try {
       const stickerRecord = await supabaseService.uploadSticker(lastUploadedStickerBlob, stickerName);
       if (stickerRecord && stickerRecord.image_url) {
         finalUrl = stickerRecord.image_url;
+        stickerId = stickerRecord.sticker_id || stickerId;
       }
     } catch (err) {
       console.warn('Could not upload sticker to Supabase:', err.message);
@@ -1563,7 +1132,7 @@ btnSaveCustomSticker.addEventListener('click', async () => {
 
   // Add to local catalog
   const newSticker = {
-    id: `custom-${Date.now()}`,
+    id: stickerId,
     name: stickerName,
     src: finalUrl
   };
@@ -1713,10 +1282,9 @@ saveTemplateForm.addEventListener('submit', async (e) => {
 
   const name = tplName.value.trim();
   const isShared = chkSharePublic.checked;
-  const designData = serializeDesignData();
-  if (lastCaptureSettings) designData.capture = { ...lastCaptureSettings };
-
   try {
+    const designData = serializeDesignData();
+    if (lastCaptureSettings) designData.capture = { ...lastCaptureSettings };
     await supabaseService.saveTemplate({
       name,
       designData,
@@ -1976,6 +1544,27 @@ btnExport?.addEventListener('click', async () => {
 
 btnSaveToGallery?.addEventListener('click', handleSaveToSessionGallery);
 
+document.querySelector('#btnSharePhoto').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  const status = document.querySelector('#sharePhotoStatus');
+  button.disabled = true;
+  status.textContent = '';
+  try {
+    const dataUrl = exportImage('image/png');
+    const result = await sharePhoto(dataUrl);
+    if (result === 'unsupported') {
+      await downloadDataUrl(dataUrl);
+      status.textContent = 'อุปกรณ์นี้แชร์ไฟล์โดยตรงไม่ได้ กรุณาบันทึกภาพ แล้วแนบภาพในแอปโซเชียลที่ต้องการ';
+    } else if (result === 'shared') {
+      status.textContent = 'ส่งภาพไปยังแอปที่เลือกแล้ว';
+    }
+  } catch (error) {
+    status.textContent = `แชร์ภาพไม่สำเร็จ: ${error.message} ลองกดดาวน์โหลดภาพแล้วแชร์จากแอปโซเชียล`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
 function updateStripSummary() {
   const layout = selectedStripFrame?.layout;
   if (activeCaptureTemplate) activeBurstCount = activeCaptureTemplate.capture.count;
@@ -2065,7 +1654,7 @@ function renderStripPreview(preview) {
 }
 
 async function handleCapture() {
-  if (isCapturing) return;
+  if (isCapturing || isChangingCamera) return;
   if (!videoElement.videoWidth || videoElement.readyState < 2) {
     showError('กล้องยังไม่พร้อม กรุณาอนุญาตการใช้กล้องและรอภาพปรากฏก่อนถ่าย');
     return;
@@ -2167,11 +1756,13 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
       throw new Error('กรุณาเลือกไฟล์ PNG, WebP หรือ JPG/JPEG');
     }
     if (file.size > 15 * 1024 * 1024) throw new Error('กรุณาเลือกไฟล์ขนาดไม่เกิน 15 MB');
+    let manuallySelected = false;
     const manual = document.querySelector('#stripCutoutMode').value === 'manual';
     let source = file;
     if (manual) {
       status.textContent = 'เลือกช่องภาพที่ต้องการเจาะในกรอบ';
       source = await openCutoutPicker(file, true);
+      manuallySelected = true;
       if (!source) {
         status.textContent = 'ยกเลิกการเพิ่มกรอบแล้ว';
         return;
@@ -2207,6 +1798,7 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
       if (!result.slotCount || !result.removedRatio || result.blob.type !== 'image/png') {
         status.textContent = 'ไม่พบช่องอัตโนมัติ กรุณาคลิกเจาะช่องเอง';
         processed = await openCutoutPicker(file, true);
+        manuallySelected = true;
         if (!processed) {
           status.textContent = 'ยกเลิกการเพิ่มกรอบแล้ว';
           return;
@@ -2222,7 +1814,7 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
       ctx.clearRect(0, 0, check.width, check.height);
       ctx.drawImage(img, 0, 0, check.width, check.height);
     }
-    const layout = getFrameLayout(ctx.getImageData(0, 0, check.width, check.height));
+    const layout = getFrameLayout(ctx.getImageData(0, 0, check.width, check.height), { allowEdgeSlots: manuallySelected });
     const frame = { id: `strip-${crypto.randomUUID()}`, name: file.name.replace(/\.[^.]+$/, ''), src: url, stripUpload: true, layout };
     FRAMES_CATALOG.unshift(frame);
     activeCaptureTemplate = null;
@@ -2237,4 +1829,11 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
     input.disabled = false;
     input.value = '';
   }
+});
+
+document.querySelector('#cutoutSelectionMode').addEventListener('change', () => {
+  if (!cutoutState) return;
+  cutoutState.firstCorner = null;
+  drawCutoutPreview();
+  document.querySelector('#cutoutStatus').textContent = 'เลือกพื้นที่ใหม่ได้เลย หากเจาะเกินให้กดล้างทั้งหมด';
 });

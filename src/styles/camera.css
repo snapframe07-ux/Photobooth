@@ -1,0 +1,471 @@
+/* ==========================================================================
+   Photobooth Studio Camera View
+   ========================================================================== */
+.cam-studio-card {
+  position: relative;
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  border: 2px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  user-select: none;
+}
+
+.cam-header-title {
+  padding: 0.7rem 1rem 0.3rem 1rem;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.cam-studio-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+/* Film Perforation Edges */
+.film-side-holes {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+  pointer-events: none;
+}
+
+.film-side-holes.left { left: 4px; }
+.film-side-holes.right { right: 4px; }
+
+.film-hole {
+  width: 8px;
+  height: 12px;
+  background: var(--surface-sunken);
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+}
+
+/* Main Workspace (Left - Center - Right) */
+.cam-workspace {
+  display: grid;
+  grid-template-columns: 104px 1fr 104px;
+  gap: 0.8rem;
+  padding: 0.5rem 1.5rem;
+  align-items: center;
+  min-height: clamp(360px, 52vh, 560px);
+}
+
+/* ป้ายกำกับกลุ่มควบคุม — เดิมเป็นไอคอนล้วน เดาไม่ออกว่าปุ่มไหนทำอะไร */
+.panel-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-align: center;
+  margin-bottom: 0.1rem;
+}
+
+/* --- Left Panel (Aspect Ratio & Filters) --- */
+.cam-left-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2rem;
+  z-index: 4;
+}
+
+.aspect-ratio-group,
+.timer-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.btn-aspect-opt,
+.btn-timer-opt {
+  width: 72px;
+  height: 40px;
+  background: var(--surface-2);
+  border: 2px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-aspect-opt:hover,
+.btn-timer-opt:hover {
+  background: var(--fill-2);
+  border-color: var(--accent-soft);
+}
+
+.btn-aspect-opt.active,
+.btn-timer-opt.active {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-arrow-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 6px 12px;
+  min-width: 44px;
+  min-height: 36px;
+  border-radius: var(--r-sm);
+  transition: all 0.2s;
+}
+
+.btn-arrow-toggle:hover {
+  color: var(--accent);
+  background: var(--fill-1);
+}
+
+/* Filter Swatches Carousel */
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.filter-carousel-viewport {
+  height: 250px;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.filter-carousel-track {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.filter-swatch-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  gap: 4px;
+  transition: transform 0.2s;
+}
+
+.filter-swatch-item:hover {
+  transform: scale(1.05);
+}
+
+.filter-swatch-box {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--r-sm);
+  border: 2px solid var(--border);
+  transition: all 0.2s ease;
+  box-shadow: var(--shadow-sm);
+}
+
+.filter-swatch-item.active .filter-swatch-box {
+  border-color: var(--accent);
+  box-shadow: var(--glow-accent);
+  transform: scale(1.08);
+}
+
+.filter-swatch-name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.filter-swatch-item.active .filter-swatch-name {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+/* ตัวอย่างสีของฟิลเตอร์ — ข้อมูลงานศิลป์ ไม่ใช่สี UI จึงคงค่าดิบไว้ */
+.swatch-classic { background: linear-gradient(135deg, #a1a1aa, #52525b); }
+.swatch-sunlit  { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.swatch-frost   { background: linear-gradient(135deg, #38bdf8, #0284c7); }
+.swatch-noir    { background: linear-gradient(135deg, #e4e4e7, #18181b); }
+.swatch-vivid   { background: linear-gradient(135deg, #ec4899, #8b5cf6); }
+.swatch-warm    { background: linear-gradient(135deg, #fb923c, #b45309); }
+.swatch-vintage { background: linear-gradient(135deg, #d97706, #78350f); }
+
+/* --- Center Area (Video & Controls) --- */
+.cam-center-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 100%;
+}
+
+.cam-preview-box {
+  position: relative;
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 4 / 3;
+  background: var(--surface-dark);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  border: 3px solid var(--accent-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: aspect-ratio 0.3s ease;
+  box-shadow: var(--shadow-md);
+}
+
+.cam-preview-box video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: filter 0.2s ease, transform 0.1s ease;
+}
+
+.cam-preview-box video.mirror {
+  transform: scaleX(-1);
+}
+
+/* 3x3 Grid Overlay */
+.cam-grid-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+  z-index: 6;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.cam-grid-overlay.active {
+  opacity: 1;
+}
+
+.cam-grid-cell {
+  border-right: 1px dashed var(--text-on-dark);
+  border-bottom: 1px dashed var(--text-on-dark);
+}
+
+.cam-grid-cell:nth-child(3n) { border-right: none; }
+.cam-grid-cell:nth-child(n+7) { border-bottom: none; }
+
+/* Zoom Ruler Bar */
+.zoom-ruler-bar {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface-glass);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 8;
+  box-shadow: var(--shadow-md);
+}
+
+.zoom-icon {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.zoom-ruler-track {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 160px;
+}
+
+.zoom-ruler-input {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+  height: 4px;
+}
+
+/* --- Right Panel (Timer & Brightness) --- */
+.cam-right-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  z-index: 4;
+}
+
+.brightness-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  height: 180px;
+}
+
+.brightness-icon {
+  font-size: 1rem;
+  color: var(--text-muted);
+}
+
+.brightness-slider-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 130px;
+}
+
+.brightness-input {
+  writing-mode: bt-lr;
+  -webkit-appearance: slider-vertical;
+  width: 8px;
+  height: 120px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* --- Bottom Toolbar & Film Strip --- */
+.cam-bottom-filmstrip {
+  background: var(--surface-2);
+  border-top: 2px solid var(--border);
+  padding: 0.6rem 1rem 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  position: relative;
+}
+
+.film-holes-horizontal {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 0.5rem;
+}
+
+.film-hole-h {
+  width: 12px;
+  height: 7px;
+  background: var(--surface-sunken);
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+}
+
+.cam-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-around;
+  width: 100%;
+  max-width: 620px;
+  margin: 0 auto;
+}
+
+.btn-tool-icon {
+  position: relative;
+  width: 64px;
+  min-height: 60px;
+  padding: 0.4rem 0.2rem 0.35rem;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 2px solid var(--border-strong);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 1.4rem;
+  line-height: 1.1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-tool-icon .tool-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.btn-tool-icon:hover {
+  background: var(--fill-1);
+  border-color: var(--accent-soft);
+  transform: translateY(-2px);
+}
+
+.btn-tool-icon.active {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+
+.btn-tool-icon.active .tool-label {
+  color: var(--accent);
+}
+
+.badge-count {
+  position: absolute;
+  bottom: -6px;
+  right: -6px;
+  background: var(--lav-ink);
+  color: var(--text-on-accent);
+  font-size: 0.75rem;
+  font-weight: 800;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+}
+
+/* Large Shutter Button */
+.btn-shutter-rec {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 5px solid var(--accent-soft);
+  padding: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  box-shadow: var(--glow-accent);
+}
+
+.btn-shutter-rec:hover {
+  transform: scale(1.06);
+  border-color: var(--accent);
+}
+
+.btn-shutter-rec:active {
+  transform: scale(0.95);
+}
+
+.shutter-inner-dot {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--accent);
+  transition: background 0.2s;
+}
+

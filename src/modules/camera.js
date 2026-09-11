@@ -58,7 +58,7 @@ export async function initCamera(videoElement, options = {}) {
 
   const constraints = {
     video: {
-      facingMode: facingMode,
+      facingMode: options.exactFacing ? { exact: facingMode } : { ideal: facingMode },
       width: options.width ? { ideal: options.width } : { ideal: 1280 },
       height: options.height ? { ideal: options.height } : { ideal: 720 }
     },
@@ -68,7 +68,7 @@ export async function initCamera(videoElement, options = {}) {
   try {
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     currentStream = stream;
-    currentFacingMode = facingMode;
+    currentFacingMode = stream.getVideoTracks()[0]?.getSettings?.().facingMode || facingMode;
 
     videoElement.srcObject = stream;
     videoElement.setAttribute('playsinline', 'true'); // Required for iOS Safari compatibility
@@ -76,6 +76,8 @@ export async function initCamera(videoElement, options = {}) {
 
     return stream;
   } catch (error) {
+    stopCamera();
+    videoElement.srcObject = null;
     const friendlyMessage = getErrorMessage(error);
     console.error('Camera Init Error:', error);
     throw new Error(friendlyMessage);
@@ -105,8 +107,15 @@ export function stopCamera() {
  * @returns {Promise<MediaStream>}
  */
 export async function switchCamera(videoElement) {
+  const previousFacingMode = currentFacingMode;
   const nextFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
-  return await initCamera(videoElement, { facingMode: nextFacingMode });
+  try {
+    return await initCamera(videoElement, { facingMode: nextFacingMode, exactFacing: true });
+  } catch (error) {
+    // Restore the usable camera if this device has no camera on the other side.
+    await initCamera(videoElement, { facingMode: previousFacingMode });
+    throw error;
+  }
 }
 
 /**

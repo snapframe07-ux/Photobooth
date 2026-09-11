@@ -1,3 +1,5 @@
+import { serializeLayerSource } from './templateAssets.js';
+import { sharePhoto } from './photoShare.js';
 /**
  * Canvas Engine Module (SnapFrame)
  * Interactive Layered Image Composition Engine:
@@ -766,7 +768,7 @@ export function serializeDesignData() {
     layers: layers.map(layer => ({
       id: layer.id,
       type: layer.type,
-      src: layer.src || null,
+      src: serializeLayerSource(layer),
       x: Math.round(layer.x),
       y: Math.round(layer.y),
       width: layer.width,
@@ -871,17 +873,9 @@ export async function downloadDataUrl(dataUrl, filename = 'snapframe-photo.png',
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   if (ios) {
-    // Convert synchronously so share() remains inside the button's user activation.
-    const bytes = Uint8Array.from(atob(dataUrl.split(',')[1]), c => c.charCodeAt(0));
-    const file = new File([bytes], filename, { type: format });
-    if (navigator.share && navigator.canShare?.({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file] });
-        return;
-      } catch (error) {
-        if (error.name === 'AbortError') return;
-      }
-    }
+    try {
+      if (await sharePhoto(dataUrl, filename) !== 'unsupported') return;
+    } catch { /* Keep the save-image fallback available if sharing fails. */ }
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.setAttribute('role', 'dialog');

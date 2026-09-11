@@ -1,0 +1,281 @@
+/* ==========================================================================
+   SnapFrame — Pastel Light Theme
+   ทุกสีในไฟล์นี้ต้องอ้างจาก :root เท่านั้น
+   ข้อยกเว้นเดียว: gradient ของ .swatch-* (เป็นตัวอย่างสีฟิลเตอร์ ไม่ใช่สี UI)
+   ฟอนต์โหลดจาก index.html (<link> + preconnect) ไม่ใช้ @import
+   ========================================================================== */
+
+:root {
+  /* --- พื้นผิว --- */
+  --bg-page:        #FFF5F7;
+  --bg-wash-1:      rgba(168, 218, 220, 0.30);
+  --bg-wash-2:      rgba(255, 229, 160, 0.32);
+  --surface:        #FFFFFF;
+  --surface-2:      #FFF0F4;
+  --surface-sunken: #F7F1F9;
+  --surface-dark:   #2B2233;
+  --surface-glass:  rgba(255, 255, 255, 0.82);
+
+  /* --- เส้นขอบ / พื้นอ่อน --- */
+  --border:        #F2DCE5;
+  --border-strong: #E0BFCF;
+  --fill-1: rgba(176, 36, 85, 0.05);
+  --fill-2: rgba(176, 36, 85, 0.09);
+  --fill-3: rgba(176, 36, 85, 0.14);
+
+  /* --- ตัวอักษร --- */
+  --text-main:      #2B2233;
+  --text-muted:     #6B5B73;
+  --text-faint:     #9A8AA3;
+  --text-on-dark:   #FFF5F7;
+  --text-on-accent: #FFFFFF;
+
+  /* --- Accent: คู่ pastel (พื้น) + ink (ตัวอักษร/ไอคอน) --- */
+  --pink: #FFB3C7;  --pink-tint: #FFE9F0;  --pink-ink: #B02455;
+  --mint: #A8DADC;  --mint-tint: #DFF2F3;  --mint-ink: #0E6068;
+  --sun:  #FFE5A0;  --sun-tint:  #FFF3D6;  --sun-ink:  #7A5400;
+  --lav:  #CDB4F6;  --lav-tint:  #EDE4FC;  --lav-ink:  #5B2FAE;
+
+  --accent:      var(--pink-ink);
+  --accent-soft: var(--pink);
+  --accent-tint: var(--pink-tint);
+  --accent-gradient:     linear-gradient(135deg, #FFB3C7 0%, #CDB4F6 50%, #A8DADC 100%);
+  --accent-gradient-ink: linear-gradient(135deg, #B02455 0%, #5B2FAE 100%);
+
+  /* --- semantic --- */
+  --danger:  #FFC9D1;  --danger-tint:  #FFE1E6;  --danger-ink:  #A81932;
+  --success: #B8ECD5;  --success-tint: #DFF6EB;  --success-ink: #0E6647;
+
+  /* --- ฉากทึบทับวิดีโอ --- */
+  --scrim:        rgba(43, 34, 51, 0.55);
+  --scrim-strong: rgba(43, 34, 51, 0.72);
+
+  /* --- เงา (โทนชมพู ไม่ใช่ดำ) --- */
+  --shadow-sm: 0 2px 6px rgba(139, 90, 110, 0.10);
+  --shadow-md: 0 6px 18px rgba(139, 90, 110, 0.13);
+  --shadow-lg: 0 14px 34px rgba(139, 90, 110, 0.16);
+  --glow-accent: 0 6px 18px rgba(176, 36, 85, 0.26);
+
+  /* --- รัศมี --- */
+  --r-sm: 10px;  --r-md: 16px;  --r-lg: 24px;  --r-pill: 999px;
+
+  --font-family: 'Plus Jakarta Sans', 'IBM Plex Sans Thai', system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  font-family: var(--font-family);
+  font-size: 16px;
+  line-height: 1.55;
+  background-color: var(--bg-page);
+  background-image:
+    radial-gradient(at 0% 0%, var(--bg-wash-1) 0px, transparent 55%),
+    radial-gradient(at 100% 100%, var(--bg-wash-2) 0px, transparent 55%);
+  background-attachment: fixed;
+  color: var(--text-main);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+#app {
+  width: 100%;
+  max-width: 960px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ==========================================================================
+   Header & Navigation
+   ========================================================================== */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: var(--surface-glass);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  padding: 0.8rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.logo-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.logo-icon {
+  font-size: 1.6rem;
+}
+
+.logo-title h2 {
+  font-size: 1.5rem;
+  font-weight: 800;
+  background: var(--accent-gradient-ink);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.03em;
+}
+
+.auth-box {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.guest-badge {
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: var(--lav-tint);
+  color: var(--lav-ink);
+  border: 1px solid var(--lav-ink);
+  padding: 0.25rem 0.7rem;
+  border-radius: var(--r-pill);
+  white-space: nowrap;
+}
+
+.guest-badge.member {
+  background: var(--success-tint);
+  color: var(--success-ink);
+  border-color: var(--success-ink);
+}
+
+/* Segmented tab control */
+.nav-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.3rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 0.3rem;
+  border-radius: var(--r-md);
+}
+
+.nav-btn {
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  min-height: 52px;
+  padding: 0.4rem 0.3rem;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  line-height: 1.2;
+}
+
+.nav-btn .nav-ico { font-size: 1.2rem; }
+
+.nav-btn .nav-label {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.nav-btn:hover {
+  background: var(--fill-1);
+  color: var(--text-main);
+}
+
+.nav-btn.active {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ==========================================================================
+   Main Content
+   ========================================================================== */
+.main-content {
+  flex: 1;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.view-section {
+  width: 100%;
+}
+
+.view-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  box-shadow: var(--shadow-lg);
+}
+
+.view-card h3 {
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+
+/* Canvas display */
+.canvas-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: var(--surface-dark);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  border: 3px solid var(--accent-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.canvas-container canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.countdown-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+.countdown-overlay.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.countdown-number {
+  font-size: 6rem;
+  font-weight: 900;
+  color: var(--text-on-dark);
+  text-shadow: 0 10px 25px var(--scrim-strong);
+}
+

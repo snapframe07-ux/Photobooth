@@ -1,3 +1,4 @@
+import { loadImageFromBlob } from './imageLoader.js';
 /**
  * Segmenter Module (SnapFrame)
  * Multi-Engine AI & Color-Key Background Removal System:
@@ -65,29 +66,6 @@ export async function initSegmenter(onProgress = () => {}) {
   return initPromise;
 }
 
-function loadImageElementFromFile(imageFile) {
-  return new Promise((resolve, reject) => {
-    if (!imageFile || !(imageFile instanceof Blob)) {
-      return reject(new Error('ไฟล์รูปภาพไม่ถูกต้อง'));
-    }
-
-    const objectUrl = URL.createObjectURL(imageFile);
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-
-    img.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-      resolve(img);
-    };
-
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error('ไม่สามารถโหลดภาพต้นฉบับได้'));
-    };
-
-    img.src = objectUrl;
-  });
-}
 
 /**
  * Top-Corner Background Removal Algorithm.
@@ -205,7 +183,7 @@ async function removeBackgroundHybrid(imageFile, options = {}) {
 
   let imageElement;
   try {
-    imageElement = await loadImageElementFromFile(imageFile);
+    imageElement = await loadImageFromBlob(imageFile);
   } catch (err) {
     onError(err);
     return imageFile;
@@ -334,7 +312,7 @@ export function floodFillRegion(px, w, h, startIdx, tolerance, claimed = null) {
  * กรอบถูกยืดเป็นขนาด canvas อยู่แล้ว ย่อจึงไม่เสียคุณภาพ และกันหน่วยความจำบาน
  */
 export async function loadFrameCanvas(imageFile) {
-  const img = await loadImageElementFromFile(imageFile);
+  const img = await loadImageFromBlob(imageFile);
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
   if (!iw || !ih) throw new Error('ภาพไม่มีขนาด');

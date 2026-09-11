@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectFrameSlots, getFrameLayout } from './frameSlots.js';
+import { detectFrameSlots, getFrameLayout, clearFrameRectangle } from './frameSlots.js';
 import { composePhotoStrip } from './photoStrip.js';
 
 function makeFrame(width = 100, height = 240) {
@@ -69,4 +69,18 @@ test('custom frame export preserves frame proportions and uses centered cover cr
   } finally {
     delete globalThis.document;
   }
+});
+
+test('manual openings preserve artwork and may touch frame edges', () => {
+  const square = makeFrame(100, 100);
+  clearFrameRectangle(square, { x: 85, y: 85 }, { x: 14, y: 14 });
+  assert.equal(square.data[(10 * 100 + 10) * 4 + 3], 255);
+  assert.deepEqual(detectFrameSlots(square), [{ x: 14, y: 14, width: 72, height: 72 }]);
+  const meme = makeFrame(100, 100);
+  clearFrameRectangle(meme, { x: 0, y: 28 }, { x: 99, y: 99 });
+  assert.equal(meme.data[3], 255);
+  assert.deepEqual(detectFrameSlots(meme), []);
+  assert.deepEqual(detectFrameSlots(meme, { allowEdgeSlots: true }), [{ x: 0, y: 28, width: 100, height: 72 }]);
+  assert.equal(getFrameLayout(meme, { allowEdgeSlots: true }).slots.length, 1);
+  assert.throws(() => clearFrameRectangle(meme, { x: -1, y: 0 }, { x: 3, y: 4 }));
 });

@@ -246,13 +246,14 @@ export class SupabaseService {
       throw new Error('กรุณาเข้าสู่ระบบก่อนอัปโหลดสติกเกอร์ส่วนตัว');
     }
 
-    const fileExt = file.name.split('.').pop();
+    const fileExt = file.type?.split('/')[1] || file.name?.split('.').pop() || 'png';
     const filePath = `stickers/${user.id}/${Date.now()}_${Math.random().toString(36).substring(2, 6)}.${fileExt}`;
 
     const { error: uploadError } = await supabase
       .storage
       .from('stickers')
       .upload(filePath, file, {
+        contentType: file.type || 'image/png',
         cacheControl: '3600',
         upsert: false
       });
@@ -270,7 +271,7 @@ export class SupabaseService {
       .from('stickers')
       .insert({
         user_id: user.id,
-        name: name || file.name,
+        name: name || file.name || 'สติกเกอร์ส่วนตัว',
         image_url: publicUrl,
         is_system_asset: false,
         created_at: new Date().toISOString()
