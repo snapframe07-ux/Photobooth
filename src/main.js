@@ -1,4 +1,5 @@
-import { sharePhoto } from './modules/photoShare.js';
+import { sharePhoto, copyPhoto, isMobilePhotoDevice } from './modules/photoShare.js';
+import { snapshotGifFrame, readGifFrames, encodePhotoGif } from './modules/photoGif.js';
 import { FRAMES_CATALOG, STICKERS_CATALOG, FILTERS_CATALOG } from './data/catalogs.js';
 import { renderAppLayout } from './ui/appLayout.js';
 import { loadImageFromBlob } from './modules/imageLoader.js';
@@ -6,7 +7,7 @@ import { bindCatalogDeleteButtons, loadSavedCatalog } from './ui/assetGallery.js
 import './style.css';
 import { composePhotoStrip, getStripLayout } from './modules/photoStrip.js';
 import { serializeCaptureFrame, restoreCaptureFrame } from './modules/templateFrame.js';
-import { getFrameLayout, clearFrameRectangle } from './modules/frameSlots.js';
+import { getFrameLayout, clearFrameRectangle, clearSelectedFrameSlots } from './modules/frameSlots.js';
 import { applyPixelFilter } from './modules/imageFilters.js';
 
 // Modules
@@ -58,6 +59,14 @@ let activeZoom = 1.0;
 let usingCssZoom = true;
 let activeEditorFilter = 'none';   // ฟิลเตอร์ที่ใช้กับ base layer ในหน้าตกแต่ง
 let activeBurstCount = 4;
+let gifPhotos = [];
+
+function setGifPhotos(photos) {
+  gifPhotos = photos;
+  document.querySelector('#btnExportGif').disabled = photos.length < 2;
+  document.querySelector('#gifPreviewDialog').close();
+  document.querySelector('#gifPreviewImage').removeAttribute('src');
+}
 let selectedStripFrame = FRAMES_CATALOG[0];
 let stripOrientation = 'vertical';
 let isCapturing = false;
@@ -836,9 +845,45 @@ function drawCutoutPreview() {
     }
   }
   g.drawImage(work, 0, 0);
+  for (const [index, slot] of cutoutState.candidates.entries()) {
+    g.strokeStyle = slot.selected ? '#00a65a' : '#ff0066';
+    g.lineWidth = Math.max(2, w / 250);
+    g.strokeRect(slot.minX, slot.minY, slot.maxX - slot.minX + 1, slot.maxY - slot.minY + 1);
+    g.font = `bold ${Math.max(16, w / 30)}px sans-serif`;
+    g.fillStyle = g.strokeStyle;
+    g.fillText(String(index + 1), slot.minX + 4, slot.minY + Math.max(18, w / 28));
+  }
 }
 
-async function openCutoutPicker(source, requireSlots = false) {
+function renderCutoutCandidates() {
+  const list = document.querySelector('#cutoutCandidates');
+  list.replaceChildren();
+  cutoutState.candidates.forEach((slot, index) => {
+    const row = document.createElement('div');
+    const label = document.createElement('label');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = slot.selected;
+    checkbox.addEventListener('change', () => {
+      slot.selected = checkbox.checked;
+      drawCutoutPreview();
+    });
+    label.append(checkbox, ` ช่อง ${index + 1} `);
+    const adjust = document.createElement('button');
+    adjust.type = 'button';
+    adjust.className = 'btn btn-sm btn-secondary';
+    adjust.textContent = 'ปรับขอบ';
+    adjust.addEventListener('click', () => {
+      cutoutState.editingCandidate = index;
+      cutoutState.firstCorner = null;
+      document.querySelector('#cutoutStatus').textContent = `แตะสองมุมใหม่สำหรับช่อง ${index + 1}`;
+    });
+    row.append(label, adjust);
+    list.append(row);
+  });
+}
+
+async function openCutoutPicker(source, requireSlots = false, candidates = []) {
   if (!source) return null;
   const { canvas, ctx, w, h } = await loadFrameCanvas(source);
   const imageData = ctx.getImageData(0, 0, w, h);
@@ -851,6 +896,8 @@ async function openCutoutPicker(source, requireSlots = false) {
     imageData,
     original: new Uint8ClampedArray(imageData.data),
     requireSlots,
+    candidates: candidates.map(slot => ({ ...slot, selected: false })),
+    editingCandidate: null,
     firstCorner: null,
     resolve: null
   };
@@ -859,6 +906,8 @@ async function openCutoutPicker(source, requireSlots = false) {
   frameCutoutCanvas.height = h;
   document.querySelector('#cutoutSelectionMode').value = 'rectangle';
   document.querySelector('#cutoutStatus').textContent = 'แตะมุมแรกและมุมตรงข้ามของช่องภาพ เก็บลายกรอบหรือข้อความไว้นอกช่อง ทำซ้ำได้ 1–4 ช่อง หรือเลือกวิธีลบตามสีสำหรับพื้นสีเขียว';
+  if (candidates.length) document.querySelector('#cutoutStatus').textContent = 'เลือกช่องจากรายการด้านบน (สีเขียว = เลือกแล้ว) กดปรับขอบเพื่อแตะสองมุมใหม่ หรือแตะสองมุมบนภาพเพื่อเพิ่มช่องเอง แล้วกดใช้กรอบนี้';
+  renderCutoutCandidates();
   drawCutoutPreview();
   frameCutoutModal.classList.remove('hidden');
 
@@ -882,7 +931,7 @@ frameCutoutCanvas?.addEventListener('click', (e) => {
   const y = Math.floor((e.clientY - rect.top) * (h / rect.height));
   if (x < 0 || y < 0 || x >= w || y >= h) return;
 
-  if (document.querySelector('#cutoutSelectionMode').value === 'rectangle') {
+  if (cutoutState.editingCandidate !== null || document.querySelector('#cutoutSelectionMode').value === 'rectangle') {
     const status = document.querySelector('#cutoutStatus');
     if (!cutoutState.firstCorner) {
       cutoutState.firstCorner = { x, y };
@@ -894,7 +943,18 @@ frameCutoutCanvas?.addEventListener('click', (e) => {
       return;
     }
     try {
-      clearFrameRectangle(imageData, cutoutState.firstCorner, { x, y });
+      if (cutoutState.editingCandidate !== null) {
+        const first = cutoutState.firstCorner;
+        if (first.x === x || first.y === y) throw new Error('กรุณาเลือกสองมุมให้เป็นช่องภาพสี่เหลี่ยม');
+        Object.assign(cutoutState.candidates[cutoutState.editingCandidate], {
+          minX: Math.min(first.x, x), minY: Math.min(first.y, y),
+          maxX: Math.max(first.x, x), maxY: Math.max(first.y, y), selected: true
+        });
+        cutoutState.editingCandidate = null;
+        renderCutoutCandidates();
+      } else {
+        clearFrameRectangle(imageData, cutoutState.firstCorner, { x, y });
+      }
       status.textContent = 'เจาะช่องแล้ว เลือกสองมุมเพื่อเพิ่มช่อง หรือกดใช้กรอบนี้';
     } catch (error) {
       status.textContent = error.message;
@@ -922,6 +982,9 @@ btnCutoutReset?.addEventListener('click', () => {
   if (!cutoutState) return;
   cutoutState.firstCorner = null;
   cutoutState.imageData.data.set(cutoutState.original);
+  cutoutState.editingCandidate = null;
+  cutoutState.candidates.forEach(slot => { slot.selected = false; });
+  renderCutoutCandidates();
   drawCutoutPreview();
 });
 
@@ -930,7 +993,13 @@ btnCloseCutoutModal?.addEventListener('click', () => closeCutoutPicker(null));
 
 btnCutoutApply?.addEventListener('click', async () => {
   if (!cutoutState) return closeCutoutPicker(null);
-  const { work, workCtx, imageData } = cutoutState;
+  const { work, workCtx } = cutoutState;
+  const imageData = new ImageData(new Uint8ClampedArray(cutoutState.imageData.data), cutoutState.w, cutoutState.h);
+  if (cutoutState.firstCorner || cutoutState.editingCandidate !== null) {
+    document.querySelector('#cutoutStatus').textContent = 'กรุณาเลือกสองมุมให้ครบก่อนยืนยัน';
+    return;
+  }
+  clearSelectedFrameSlots(imageData, cutoutState.candidates);
   if (cutoutState.requireSlots) {
     try {
       getFrameLayout(imageData, { allowEdgeSlots: true });
@@ -984,35 +1053,23 @@ async function handleFrameUpload(e) {
       );
 
       if (wantsCutout) {
-        let needManual = false;
         try {
           updateProgress(10, 'กำลังตรวจหาช่องใส่รูป...');
           // หว่าน probe ทั่วภาพแล้วคัดเฉพาะบริเวณที่เป็นช่องใส่รูป
           // (ของเดิมหว่าน seed ที่กลางภาพจุดเดียว จึงพังกับกรอบหลายช่อง
           //  เพราะกลางภาพมักตกบนเส้นคั่นระหว่างช่อง แล้วไหลไปกินพื้นหลังกรอบแทน)
-          const { blob: processed, removedRatio, slotCount } = await cutoutFrameSlots(file, {
+          const { candidates } = await cutoutFrameSlots(file, {
+            detectOnly: true,
             onProgress: ({ progress, message }) => updateProgress(progress, message)
           });
-
-          if (slotCount === 0) {
-            // ต้องเช็ค slotCount ตรง ๆ ไม่ใช่ดูแค่ removedRatio
-            // เพราะเคสกรอบหลายช่องเคยได้ ratio ที่ดูปกติแต่ผลผิดสิ้นเชิง
-            needManual = true;
-          } else if (removedRatio > 0.9) {
-            showError('กรอบนี้เจาะแล้วแทบไม่เหลือลายกรอบ จึงใช้ภาพต้นฉบับแทน — ลองกด "✂️ เจาะช่องเอง" เพื่อชี้ช่องที่ต้องการ');
-          } else {
-            finalBlob = processed;
-            updateStatus(true, `เจาะช่องใส่รูปได้ ${slotCount} ช่อง`);
-          }
+          hideProgress();
+          const processed = await openCutoutPicker(file, true, candidates);
+          if (processed) finalBlob = processed;
         } finally {
           setTimeout(hideProgress, 1200);
         }
 
-        if (needManual) {
-          showError('ตรวจหาช่องใส่รูปอัตโนมัติไม่เจอ — คลิกชี้ช่องที่ต้องการเจาะเองได้เลย');
-          const manual = await openCutoutPicker(file);
-          if (manual) finalBlob = manual;
-        }
+
       }
     }
   } catch (err) {
@@ -1387,6 +1444,7 @@ async function loadTemplateGallery() {
           // Verify the saved decoration can be read before opening the camera.
           if (templateFrame) await loadStripDecoration(templateFrame);
           await loadTemplateDesign(design);
+          setGifPhotos([]);
           activeCaptureTemplate = { name: t.name, design, capture };
           activeBurstCount = count;
           stripOrientation = capture.orientation;
@@ -1508,6 +1566,7 @@ async function loadPhotoToEditor(dataUrl) {
     // setBaseLayerImage ปรับขนาด canvas ให้ตรงกับภาพให้เอง
     // (ของเดิมเรียก captureFrame() ซึ่งไปตั้งขนาด canvas เป็นขนาดวิดีโอ ไม่ใช่ขนาดภาพ)
     setBaseLayerImage(offscreen);
+    setGifPhotos([]);
     activeEditorFilter = 'none';
     renderEditorFilterRow();
 
@@ -1524,6 +1583,7 @@ btnStopCamera?.addEventListener('click', handleStopCamera);
 btnSwitch?.addEventListener('click', handleSwitchCamera);
 btnCapture?.addEventListener('click', handleCapture);
 btnRetake?.addEventListener('click', () => {
+  setGifPhotos([]);
   // ล้างสติกเกอร์ของช็อตที่แล้ว แต่คงกรอบไว้ (กรอบมักเป็นธีมของงานที่ใช้ซ้ำทุกช็อต)
   // ของเดิมแค่สลับแท็บ สติกเกอร์เก่าจึงค้างติดไปกับภาพใหม่
   getLayers()
@@ -1544,6 +1604,65 @@ btnExport?.addEventListener('click', async () => {
 
 btnSaveToGallery?.addEventListener('click', handleSaveToSessionGallery);
 
+document.querySelector('#btnExportGif').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  const status = document.querySelector('#gifStatus');
+  const photos = gifPhotos;
+  button.disabled = true;
+  try {
+    const blob = await encodePhotoGif(readGifFrames(photos), (current, total) => {
+      status.textContent = `กำลังสร้าง GIF ${current}/${total}…`;
+    });
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('อ่านไฟล์ GIF ไม่สำเร็จ'));
+      reader.readAsDataURL(blob);
+    });
+    if (photos !== gifPhotos) return;
+    const preview = document.querySelector('#gifPreviewImage');
+    preview.src = dataUrl;
+    await preview.decode();
+    if (photos !== gifPhotos) return;
+    document.querySelector('#gifPreviewStatus').textContent = '';
+    document.querySelector('#gifPreviewDialog').showModal();
+    status.textContent = 'พรีวิวพร้อมแล้ว ตรวจภาพเคลื่อนไหวก่อนกดดาวน์โหลด GIF';
+  } catch (error) {
+    status.textContent = `สร้าง GIF ไม่สำเร็จ: ${error.message}`;
+  } finally {
+    button.disabled = gifPhotos.length < 2;
+  }
+});
+
+const gifPreviewDialog = document.querySelector('#gifPreviewDialog');
+document.querySelector('#btnCloseGifPreview').addEventListener('click', () => gifPreviewDialog.close());
+gifPreviewDialog.addEventListener('close', () => {
+  document.querySelector('#gifPreviewImage').removeAttribute('src');
+  document.querySelector('#btnExportGif').focus();
+});
+document.querySelector('#btnDownloadGif').addEventListener('click', async event => {
+  const dataUrl = document.querySelector('#gifPreviewImage').getAttribute('src');
+  if (!dataUrl) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await downloadDataUrl(dataUrl, 'snapframe-animation.gif', 'image/gif');
+    // On iOS the save-image overlay must be visible above the page, outside this modal.
+    gifPreviewDialog.close();
+  } catch (error) {
+    document.querySelector('#gifPreviewStatus').textContent = `บันทึก GIF ไม่สำเร็จ: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+const mobilePhotoDevice = isMobilePhotoDevice();
+btnExport.textContent = mobilePhotoDevice ? '💾 บันทึกภาพ' : '💾 ดาวน์โหลดภาพ';
+document.querySelector('#btnSharePhoto').textContent = '📤 แชร์ภาพ';
+document.querySelector('#btnSharePhoto').classList.toggle('hidden',
+  !mobilePhotoDevice || !navigator.share || !navigator.canShare);
+document.querySelector('#btnCopyPhoto').classList.toggle('hidden', mobilePhotoDevice);
+
 document.querySelector('#btnSharePhoto').addEventListener('click', async event => {
   const button = event.currentTarget;
   const status = document.querySelector('#sharePhotoStatus');
@@ -1553,13 +1672,33 @@ document.querySelector('#btnSharePhoto').addEventListener('click', async event =
     const dataUrl = exportImage('image/png');
     const result = await sharePhoto(dataUrl);
     if (result === 'unsupported') {
-      await downloadDataUrl(dataUrl);
-      status.textContent = 'อุปกรณ์นี้แชร์ไฟล์โดยตรงไม่ได้ กรุณาบันทึกภาพ แล้วแนบภาพในแอปโซเชียลที่ต้องการ';
+      status.textContent = 'อุปกรณ์นี้แชร์ไฟล์โดยตรงไม่ได้ กรุณากดบันทึกภาพ แล้วแนบภาพในแอปที่ต้องการ';
     } else if (result === 'shared') {
-      status.textContent = 'ส่งภาพไปยังแอปที่เลือกแล้ว';
+      status.textContent = 'เปิดหน้าต่างแชร์ภาพแล้ว กรุณาตรวจรูปในแอปปลายทางก่อนส่ง';
+    } else if (result === 'cancelled') {
+      status.textContent = 'ยกเลิกการแชร์แล้ว';
     }
   } catch (error) {
-    status.textContent = `แชร์ภาพไม่สำเร็จ: ${error.message} ลองกดดาวน์โหลดภาพแล้วแชร์จากแอปโซเชียล`;
+    status.textContent = `แชร์ภาพไม่สำเร็จ: ${error.message} ลองกดบันทึกภาพแล้วแนบไฟล์ในแอปแชต`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.querySelector('#btnCopyPhoto').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  const status = document.querySelector('#sharePhotoStatus');
+  button.disabled = true;
+  status.textContent = '';
+  try {
+    const result = await copyPhoto(exportImage('image/png'));
+    status.textContent = result === 'copied'
+      ? 'คัดลอกภาพแล้ว วางในช่องแชตหรือโปรแกรมที่รองรับการวางรูปภาพได้ หากวางไม่ได้ให้ดาวน์โหลดแล้วแนบไฟล์'
+      : 'เบราว์เซอร์หรือการเชื่อมต่อนี้ไม่รองรับคัดลอกภาพ กรุณากดดาวน์โหลดภาพแล้วแนบไฟล์แทน';
+  } catch (error) {
+    status.textContent = error.name === 'NotAllowedError'
+      ? 'เบราว์เซอร์ไม่อนุญาตให้คัดลอกภาพ กรุณาอนุญาตการใช้คลิปบอร์ด หรือดาวน์โหลดภาพแล้วแนบไฟล์'
+      : `คัดลอกภาพไม่สำเร็จ: ${error.message} กรุณาดาวน์โหลดภาพแล้วแนบไฟล์`;
   } finally {
     button.disabled = false;
   }
@@ -1661,6 +1800,7 @@ async function handleCapture() {
   }
   hideError();
   isCapturing = true;
+  setGifPhotos([]);
   const controls = [...document.querySelectorAll('.nav-tabs button, #viewCamera button, #viewCamera input, #viewCamera select')];
   const disabledStates = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });
@@ -1678,6 +1818,7 @@ async function handleCapture() {
     const savedFrame = serializeCaptureFrame(selectedStripFrame, decoration,
       frameLayout || getStripLayout(count, 960, aspect[0] / aspect[1], stripOrientation));
     const frames = [];
+    const animationFrames = [];
     for (let i = 1; i <= count; i++) {
       if (frameLayout) {
         const slot = frameLayout.slots[i - 1];
@@ -1690,6 +1831,7 @@ async function handleCapture() {
         countdownNumber.textContent = remaining > 0 ? `${remaining}s (📸 ${i}/${count})` : `📸 ${i}/${count}`;
       }, resolve));
       frames.push(captureSingleFrame(filterOptions));
+      animationFrames.push(snapshotGifFrame(frames[frames.length - 1]));
       if (i < count) await new Promise(resolve => setTimeout(resolve, activeTimerSeconds > 0 ? 500 : 300));
     }
     const strip = composePhotoStrip(frames, decoration, aspect[0] / aspect[1], frameLayout, stripOrientation);
@@ -1697,6 +1839,7 @@ async function handleCapture() {
     getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id));
     setBaseLayerImage(strip);
     if (activeCaptureTemplate) await loadTemplateDesign(activeCaptureTemplate.design);
+    setGifPhotos(animationFrames);
     lastCaptureSettings = { count, orientation: stripOrientation, aspect: currentAspectRatio, frame: savedFrame };
     activeEditorFilter = 'none';
     renderEditorFilterRow();
@@ -1792,17 +1935,14 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
       // Allow the progress message to paint before processing the image.
       await new Promise(resolve => setTimeout(resolve, 0));
       const result = await cutoutFrameSlots(file, {
+        detectOnly: true,
         onProgress: progress => { status.textContent = progress.message; }
       });
-      let processed = result.blob;
-      if (!result.slotCount || !result.removedRatio || result.blob.type !== 'image/png') {
-        status.textContent = 'ไม่พบช่องอัตโนมัติ กรุณาคลิกเจาะช่องเอง';
-        processed = await openCutoutPicker(file, true);
-        manuallySelected = true;
-        if (!processed) {
-          status.textContent = 'ยกเลิกการเพิ่มกรอบแล้ว';
-          return;
-        }
+      const processed = await openCutoutPicker(file, true, result.candidates);
+      manuallySelected = true;
+      if (!processed) {
+        status.textContent = 'ยกเลิกการเพิ่มกรอบแล้ว';
+        return;
       }
       URL.revokeObjectURL(url);
       url = URL.createObjectURL(processed);

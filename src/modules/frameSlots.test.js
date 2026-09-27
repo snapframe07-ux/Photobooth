@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectFrameSlots, getFrameLayout, clearFrameRectangle } from './frameSlots.js';
+import { detectFrameSlots, getFrameLayout, clearFrameRectangle, clearSelectedFrameSlots } from './frameSlots.js';
 import { composePhotoStrip } from './photoStrip.js';
 
 function makeFrame(width = 100, height = 240) {
@@ -12,6 +12,28 @@ function makeFrame(width = 100, height = 240) {
   };
   return { data, width, height, clear };
 }
+
+test('confirmed selection clears the complete adjusted rectangle and preserves unselected text panels', () => {
+  const frame = makeFrame();
+  const original = frame.data.slice();
+  const candidates = [
+    { minX: 10, minY: 10, maxX: 90, maxY: 30, selected: false },
+    { minX: 15, minY: 50, maxX: 85, maxY: 160, selected: false },
+    { minX: 10, minY: 180, maxX: 90, maxY: 220, selected: false }
+  ];
+  clearSelectedFrameSlots(frame, candidates);
+  assert.deepEqual(frame.data, original);
+  candidates[1].selected = true;
+  frame.data[(90 * frame.width + 40) * 4] = 0; // Contrasting lettering inside the chosen opening.
+  clearSelectedFrameSlots(frame, candidates);
+  for (let y = 0; y < frame.height; y++) {
+    for (let x = 0; x < frame.width; x++) {
+      assert.equal(frame.data[(y * frame.width + x) * 4 + 3],
+        x >= 15 && x <= 85 && y >= 50 && y <= 160 ? 0 : 255);
+    }
+  }
+  assert.equal(getFrameLayout(frame).slots.length, 1);
+});
 
 test('detects unequal openings in top-to-bottom order, ignoring outer transparency and tiny holes', () => {
   const frame = makeFrame();

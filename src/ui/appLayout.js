@@ -41,10 +41,10 @@ export function renderAppLayout(stickerCount) {
           <p>ถ่ายทีละช็อต แล้วเรียงภาพจากบนลงล่างในกรอบที่เลือก</p>
           <div id="stripFrameChoices" class="strip-frame-choices" aria-label="เลือกกรอบรูป"></div>
           <label for="stripCutoutMode">วิธีเจาะช่องกรอบที่เพิ่มเอง</label>
-          <select id="stripCutoutMode"><option value="auto">ตรวจหาและเจาะอัตโนมัติ</option><option value="manual">เจาะช่องเองด้วยการคลิก</option></select>
+          <select id="stripCutoutMode"><option value="auto">ตรวจหาอัตโนมัติ แล้วเลือกช่องก่อนเจาะ</option><option value="manual">เจาะช่องเองด้วยการคลิก</option></select>
           <label class="btn btn-secondary" for="stripFrameUpload">＋ เพิ่มกรอบเอง</label>
           <input id="stripFrameUpload" type="file" accept="image/png,image/webp,image/jpeg,.jpg,.jpeg" class="hidden-input" />
-          <p id="stripUploadStatus" role="status">รองรับ PNG, WebP และ JPG/JPEG ระบบจะลองเจาะช่องสีเรียบในกรอบที่ไม่มีความโปร่งใสให้ ตรวจตัวอย่างก่อนถ่าย กรอบใช้ได้ในรอบการเปิดเว็บนี้</p>
+          <p id="stripUploadStatus" role="status">รองรับ PNG, WebP และ JPG/JPEG ระบบจะตรวจหาช่องสีเรียบให้เลือกและปรับขอบก่อนเจาะ ตรวจตัวอย่างก่อนถ่าย กรอบใช้ได้ในรอบการเปิดเว็บนี้</p>
           <label for="stripOrientation">การเรียงภาพในกรอบ</label>
           <select id="stripOrientation" aria-describedby="stripOrientationHint"><option value="vertical">แนวตั้ง (บนลงล่าง)</option><option value="horizontal">แนวนอน (4 ภาพจัดแบบ 2×2)</option></select>
           <p id="stripOrientationHint">แนวนอนเรียงจากซ้ายไปขวา เมื่อเลือก 4 ภาพจะจัดเป็น 2 แถว แถวละ 2 ภาพ</p>
@@ -200,6 +200,19 @@ export function renderAppLayout(stickerCount) {
         <div class="editor-actions">
           <button class="btn btn-primary btn-large" id="btnExport">💾 ดาวน์โหลดภาพถ่าย</button>
           <button class="btn btn-primary" id="btnSharePhoto">📤 แชร์ภาพไปโซเชียล</button>
+          <button class="btn btn-secondary" id="btnCopyPhoto">📋 คัดลอกภาพ</button>
+          <button class="btn btn-secondary" id="btnExportGif" disabled>🎞️ พรีวิว GIF</button>
+          <dialog id="gifPreviewDialog" class="gif-preview-dialog" aria-labelledby="gifPreviewTitle">
+            <h3 id="gifPreviewTitle">🎞️ พรีวิว GIF</h3>
+            <img id="gifPreviewImage" alt="ตัวอย่าง GIF จากภาพถ่ายต่อเนื่อง" />
+            <p>เล่นวนภาพละ 0.5 วินาที รวมฟิลเตอร์ตอนถ่าย ไม่รวมกรอบและการแต่งภายหลัง</p>
+            <p id="gifPreviewStatus" role="status"></p>
+            <div class="cutout-actions">
+              <button class="btn btn-secondary" id="btnCloseGifPreview" type="button">ปิด</button>
+              <button class="btn btn-primary" id="btnDownloadGif" type="button">💾 ดาวน์โหลด GIF</button>
+            </div>
+          </dialog>
+          <p id="gifStatus" role="status">GIF ใช้ภาพถ่ายต่อเนื่อง 2–4 ภาพ เล่นวนภาพละ 0.5 วินาที รวมฟิลเตอร์ตอนถ่าย ไม่รวมกรอบและการแต่งภายหลัง</p>
           <p id="sharePhotoStatus" role="status"></p>
           <div class="editor-sub-actions">
             <button class="btn btn-secondary" id="btnSaveTemplate">☁️ บันทึกเป็นเทมเพลต Supabase</button>
@@ -329,13 +342,14 @@ export function renderAppLayout(stickerCount) {
   <div class="modal-overlay hidden" id="frameCutoutModal">
     <div class="modal-card cutout-card">
       <button class="btn-close" id="btnCloseCutoutModal">✖️</button>
-      <h3>✂️ เจาะช่องใส่รูปเอง</h3>
-      <p class="subtitle">เลือกสองมุมเพื่อกำหนดช่องสี่เหลี่ยม หรือเลือกวิธีลบตามสี — พื้นตารางคือส่วนที่โปร่งแล้ว</p>
+      <h3>✂️ เลือกช่องใส่รูป</h3>
+      <p class="subtitle">เลือกช่องที่ตรวจพบหรือแตะสองมุมเพื่อเพิ่มช่องสี่เหลี่ยม พื้นตารางคือส่วนที่เจาะเอง ส่วนช่องที่เลือกจากรายการจะเจาะเมื่อกดใช้กรอบนี้</p>
 
       <div class="cutout-stage">
         <canvas id="frameCutoutCanvas"></canvas>
       </div>
 
+      <div id="cutoutCandidates"></div>
       <label for="cutoutSelectionMode">วิธีเลือกช่องภาพ</label>
       <select id="cutoutSelectionMode">
         <option value="rectangle">แตะสองมุมเพื่อเจาะช่องสี่เหลี่ยม (เหมาะกับกรอบลายรอบขอบ)</option>

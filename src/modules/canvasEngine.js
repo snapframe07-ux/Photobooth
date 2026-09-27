@@ -1,5 +1,4 @@
 import { serializeLayerSource } from './templateAssets.js';
-import { sharePhoto } from './photoShare.js';
 /**
  * Canvas Engine Module (SnapFrame)
  * Interactive Layered Image Composition Engine:
@@ -873,9 +872,6 @@ export async function downloadDataUrl(dataUrl, filename = 'snapframe-photo.png',
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   if (ios) {
-    try {
-      if (await sharePhoto(dataUrl, filename) !== 'unsupported') return;
-    } catch { /* Keep the save-image fallback available if sharing fails. */ }
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.setAttribute('role', 'dialog');

@@ -50,6 +50,12 @@ export function getFrameLayout(imageData, options) {
 }
 
 // Two taps work with both mouse and touch, without requiring a drag gesture.
+export function clearSelectedFrameSlots(imageData, candidates) {
+  for (const slot of candidates.filter(slot => slot.selected)) {
+    clearFrameRectangle(imageData, { x: slot.minX, y: slot.minY }, { x: slot.maxX, y: slot.maxY });
+  }
+}
+
 export function clearFrameRectangle({ data, width, height }, first, second) {
   const left = Math.min(first.x, second.x), right = Math.max(first.x, second.x);
   const top = Math.min(first.y, second.y), bottom = Math.max(first.y, second.y);

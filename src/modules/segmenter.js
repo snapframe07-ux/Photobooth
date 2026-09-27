@@ -493,6 +493,12 @@ export async function cutoutFrameSlots(imageFile, options = {}) {
     }
   }
 
+  if (options.detectOnly) {
+    return { candidates: slots.map(({ region }) => ({
+      minX: region.minX, minY: region.minY, maxX: region.maxX, maxY: region.maxY
+    })).sort((a, b) => a.minY - b.minY || a.minX - b.minX) };
+  }
+
   onProgress({ status: 'feathering', progress: 80, message: 'กำลังไล่ขอบให้เนียน...' });
   for (const s of slots) featherSlotEdge(px, w, h, cut, s.region, s.tol, s.sR, s.sG, s.sB);
 

@@ -296,6 +296,20 @@
 }
 
 /* ตัวเลือกช่องเจาะกรอบ */
+.gif-preview-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: 90dvh;
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.gif-preview-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+#gifPreviewImage { display: block; width: 100%; max-height: 55dvh; object-fit: contain; }
+
 .cutout-card {
   max-width: 640px;
 }
@@ -416,4 +430,3 @@
   font-weight: 600;
   color: var(--accent);
 }
-
