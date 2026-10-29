@@ -132,6 +132,7 @@
   .cam-preview-box { max-width: 100%; }
   .editor-actions { flex-wrap: wrap; }
   .editor-actions > .btn { flex: 0 0 auto; width: 100%; min-height: 48px; }
+  .editor-sub-actions .btn { flex: 1 1 100%; min-height: 48px; }
   .modal-overlay { padding: 12px; }
   .modal-card { padding: 20px 16px; }
   .modal-card h3 { padding-right: 36px; }
