@@ -225,7 +225,7 @@ export function renderAppLayout(stickerCount) {
         <div class="asset-selector-box">
           <div class="asset-tabs">
             <button class="asset-tab-btn active" id="tabStickers">⭐ สติกเกอร์ (<span id="stickerTabCount">${stickerCount}</span>)</button>
-            <button class="asset-tab-btn" id="tabUpload">📤 อัปโหลด AI</button>
+            <button class="asset-tab-btn" id="tabUpload">📤 อัปโหลดสติกเกอร์</button>
           </div>
 
           <!-- แถบความคืบหน้า: ใช้ร่วมกันระหว่างอัปโหลดกรอบ (แท็บกรอบรูป) และอัปโหลดสติกเกอร์ (แท็บอัปโหลด)
