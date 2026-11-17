@@ -1,6 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { encodePhotoGif } from './photoGif.js';
+import { encodePhotoGif, snapshotGifFrame, readGifFrames } from './photoGif.js';
+
+test('snapshotGifFrame and readGifFrames overlay the selected frame onto each GIF frame', () => {
+  const calls = [];
+  const ctx = {
+    fillRect() {},
+    drawImage(...args) { calls.push(args); },
+    getImageData: (x, y, width, height) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) })
+  };
+  globalThis.document = { createElement: () => ({ getContext: () => ctx }) };
+  try {
+    const shot = { width: 1280, height: 960 };
+    const snap = snapshotGifFrame(shot, 'strip-frame');
+    assert.equal(snap.width, 640);
+    assert.equal(snap.height, 480);
+    assert.deepEqual(calls, [
+      [shot, 0, 0, 640, 480],
+      ['strip-frame', 0, 0, 640, 480]
+    ]);
+    calls.length = 0;
+    const frames = readGifFrames([{ width: 320, height: 240 }, { width: 320, height: 240 }], 'editor-frame');
+    assert.equal(frames.length, 2);
+    assert.deepEqual(calls, [
+      [{ width: 320, height: 240 }, 0, 0, 320, 240],
+      ['editor-frame', 0, 0, 320, 240],
+      [{ width: 320, height: 240 }, 0, 0, 320, 240],
+      ['editor-frame', 0, 0, 320, 240]
+    ]);
+  } finally {
+    delete globalThis.document;
+  }
+});
 
 test('encodes a looping GIF with two complete frames and half-second delays', async () => {
   const frame = color => ({ width: 2, height: 2, data: new Uint8ClampedArray(Array(4).fill([...color, 255]).flat()) });
@@ -44,4 +75,32 @@ test('encodes a looping GIF with two complete frames and half-second delays', as
   await assert.rejects(encodePhotoGif([]), /2–4/);
   await assert.rejects(encodePhotoGif([frame([0, 0, 0])]), /2–4/);
   await assert.rejects(encodePhotoGif([frame([0, 0, 0]), { ...frame([0, 0, 0]), width: 3 }]), /ไม่ตรงกัน/);
+});
+
+test('readGifFrames composites scaled stickers onto each GIF frame', () => {
+  const ops = [];
+  const ctx = {
+    fillRect() {},
+    save() { ops.push(['save']); },
+    restore() { ops.push(['restore']); },
+    translate(x, y) { ops.push(['translate', x, y]); },
+    rotate(rad) { ops.push(['rotate', Math.round(rad * 100) / 100]); },
+    drawImage(...args) { ops.push(['drawImage', ...args]); },
+    getImageData: (x, y, width, height) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) })
+  };
+  globalThis.document = { createElement: () => ({ getContext: () => ctx }) };
+  try {
+    const sticker = { image: 'star-img', x: 320, y: 240, width: 100, height: 100, rotation: 90, opacity: 0.8 };
+    const frames = readGifFrames(
+      [{ width: 320, height: 240 }, { width: 320, height: 240 }],
+      null,
+      [sticker],
+      { width: 640, height: 480 }
+    );
+    assert.equal(frames.length, 2);
+    assert.ok(ops.some(op => op[0] === 'translate' && op[1] === 160 && op[2] === 120));
+    assert.ok(ops.some(op => op[0] === 'drawImage' && op[1] === 'star-img' && op[4] === 50 && op[5] === 50));
+  } finally {
+    delete globalThis.document;
+  }
 });

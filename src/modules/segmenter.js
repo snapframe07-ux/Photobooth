@@ -150,13 +150,27 @@ export function removeSolidBackground(canvas, ctx, imageData, options = {}) {
  * AI Neural Network Object & Pet Segmenter (@imgly/background-removal ONNX Engine)
  * ตัดพื้นหลัง วัตถุ, น้องแมว 🐱, สุนัข 🐶, สัตว์เลี้ยง หรือคน บนฉากหลังซับซ้อน
  */
-export async function removeBackgroundAI(imageFile, options = {}) {
-  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
+async function downscaleImageBlob(imageFile, maxSide = 1024) {
+  const img = await loadImageFromBlob(imageFile);
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+  if (Math.max(w, h) <= maxSide) return imageFile;
+  const scale = maxSide / Math.max(w, h);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(w * scale));
+  canvas.height = Math.max(1, Math.round(h * scale));
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  return new Promise(resolve => canvas.toBlob(blob => resolve(blob || imageFile), 'image/png'));
+}
 
-  try {
-    onProgress({ status: 'onnx_loading', progress: 25, message: 'กำลังประมวลผล AI ตัดวัตถุ/น้องแมว (ONNX Engine)...' });
+let bgWorker = null;
+let bgJobSeq = 0;
+const bgJobs = new Map();
 
-    const resultBlob = await removeBackgroundImgly(imageFile, {
+function runImglyInWorker(blob, onProgress) {
+  if (typeof Worker === 'undefined') {
+    return removeBackgroundImgly(blob, {
+      model: 'isnet_quint8',
       progress: (key, current, total) => {
         if (total > 0) {
           const pct = Math.min(95, Math.round(25 + (current / total) * 70));
@@ -164,6 +178,46 @@ export async function removeBackgroundAI(imageFile, options = {}) {
         }
       }
     });
+  }
+  if (!bgWorker) {
+    bgWorker = new Worker(new URL('./bgRemovalWorker.js', import.meta.url), { type: 'module' });
+    bgWorker.addEventListener('message', event => {
+      const { id, type, current, total, result, message } = event.data;
+      const job = bgJobs.get(id);
+      if (!job) return;
+      if (type === 'progress' && total > 0) {
+        const pct = Math.min(95, Math.round(25 + (current / total) * 70));
+        job.onProgress({ status: 'onnx_processing', progress: pct, message: `กำลังประมวลผล AI: ${Math.round((current / total) * 100)}%` });
+      } else if (type === 'done') {
+        bgJobs.delete(id);
+        job.resolve(result);
+      } else if (type === 'error') {
+        bgJobs.delete(id);
+        job.reject(new Error(message));
+      }
+    });
+    bgWorker.addEventListener('error', event => {
+      for (const [id, job] of bgJobs) {
+        bgJobs.delete(id);
+        job.reject(new Error(event.message || 'Worker error'));
+      }
+      bgWorker = null;
+    });
+  }
+  const id = ++bgJobSeq;
+  return new Promise((resolve, reject) => {
+    bgJobs.set(id, { resolve, reject, onProgress });
+    bgWorker.postMessage({ id, blob });
+  });
+}
+
+export async function removeBackgroundAI(imageFile, options = {}) {
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
+
+  try {
+    onProgress({ status: 'onnx_loading', progress: 25, message: 'กำลังประมวลผล AI ตัดวัตถุ/น้องแมว (ONNX Engine)...' });
+    const prepared = await downscaleImageBlob(imageFile, 1024);
+    const resultBlob = await runImglyInWorker(prepared, onProgress);
 
     onProgress({ status: 'complete', progress: 100, message: 'ตัดพื้นหลังวัตถุ/น้องแมวด้วย AI สำเร็จเป็น Transparent PNG!' });
     return resultBlob;

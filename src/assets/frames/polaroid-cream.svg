@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720" preserveAspectRatio="none">
+  <rect x="16" y="16" width="1248" height="688" rx="12" fill="none" stroke="#faf7f2" stroke-width="32"/>
+  <rect x="32" y="32" width="1216" height="656" rx="6" fill="none" stroke="#e7dfd3" stroke-width="4"/>
+  <rect x="44" y="44" width="1192" height="632" fill="none" stroke="#d6cbb9" stroke-width="2" stroke-dasharray="10 8"/>
+  <text x="640" y="696" font-family="Georgia, serif" font-style="italic" font-size="22" fill="#7c6f5e" text-anchor="middle">SnapFrame · Memories</text>
+</svg>

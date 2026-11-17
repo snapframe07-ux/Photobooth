@@ -430,3 +430,27 @@
   font-weight: 600;
   color: var(--accent);
 }
+
+/* Print only the composed photo without page chrome or margins. */
+.print-mount { display: none; }
+@media print {
+  @page { margin: 0; }
+  body > *:not(.print-mount) { display: none !important; }
+  body { background: var(--surface) !important; margin: 0 !important; min-height: 0 !important; }
+  .print-mount {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 100vw;
+    height: 100vh;
+    break-inside: avoid;
+  }
+  .print-mount img {
+    max-width: 100%;
+    max-height: 100vh;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+  }
+}

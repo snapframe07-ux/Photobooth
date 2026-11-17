@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sharePhoto, copyPhoto, isMobilePhotoDevice } from './photoShare.js';
+import { sharePhoto, copyPhoto, printPhoto, isMobilePhotoDevice } from './photoShare.js';
 
 test('photo actions distinguish phones and iPads from desktop and touch Windows PCs', () => {
   assert.equal(isMobilePhotoDevice({ userAgent: 'Windows NT 10.0', maxTouchPoints: 10 }), false);
@@ -54,4 +54,31 @@ test('copies PNG bytes as an image, handles missing support, and propagates deni
   await assert.rejects(copyPhoto('data:image/jpeg;base64,AQID'), /PNG/);
   nav.clipboard.write = async () => { throw new DOMException('denied', 'NotAllowedError'); };
   await assert.rejects(copyPhoto(url), { name: 'NotAllowedError' });
+});
+
+test('prints photo after image decode, handles missing print support, and validates data URL', async () => {
+  const url = 'data:image/png;base64,AQID';
+  await assert.rejects(printPhoto('not-a-data-url'), /ไม่ถูกต้อง/);
+  assert.equal(await printPhoto(url, {}, null), 'unsupported');
+
+  let printed = 0, decoded = 0, appendedMount = null;
+  const img = {
+    removeAttribute() { delete this._src; },
+    decode() { decoded++; return Promise.resolve(); },
+    set src(value) { this._src = value; this.onload?.(); },
+    get src() { return this._src; }
+  };
+  const doc = {
+    body: { append(node) { appendedMount = node; } },
+    querySelector: () => appendedMount,
+    createElement(tag) {
+      if (tag === 'img') return img;
+      return { append() {}, querySelector: () => img };
+    }
+  };
+  const win = { print() { printed++; } };
+  assert.equal(await printPhoto(url, win, doc), 'printed');
+  assert.equal(img.src, url);
+  assert.equal(decoded, 1);
+  assert.equal(printed, 1);
 });

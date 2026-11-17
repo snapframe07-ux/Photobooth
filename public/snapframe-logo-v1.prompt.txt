@@ -1,0 +1,11 @@
+Generated with the built-in image_gen tool.
+
+Use case: logo-brand
+Asset type: finished primary website logo, horizontal symbol-and-wordmark lockup for SnapFrame, a playful web photobooth for taking photos and decorating photo strips with frames and stickers.
+Primary request: Create one polished original logo that fits an existing soft pastel website. Combine a compact rounded instant-camera silhouette with an instant-photo frame in a simple memorable integrated symbol, with a small four-point flash sparkle at its upper right. Place the exact wordmark "SnapFrame" to the right.
+Style/medium: crisp flat vector-like graphic rendered as a high-quality PNG, smooth intentional curves, confident friendly contemporary branding, restrained visual detail.
+Color palette: pastel pink #FFB3C7, lavender #CDB4F6, mint #A8DADC for the symbol; deep berry #B02455 for "Snap" and deep purple #5B2FAE for "Frame". Limited flat fills, generous negative space.
+Typography: bold softly rounded geometric sans serif akin to Plus Jakarta Sans ExtraBold, impeccable kerning, capital S and F exactly as "SnapFrame", one single line, readable at website-header size.
+Composition: horizontal 3:1 canvas, symbol at left and wordmark at right, optically aligned as one balanced logo. Entire artwork contained with modest clear padding, large enough to occupy most of the canvas.
+Background: truly transparent alpha background, no white rectangle and no checkerboard drawn into the artwork.
+Constraints: one finished logo only, no presentation board, no variations, no mockup, no tagline, no extra text, no watermark, no drop shadows, no 3D, no photography, no overly thin strokes. Design must remain identifiable when reduced.

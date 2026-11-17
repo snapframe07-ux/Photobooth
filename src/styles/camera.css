@@ -207,6 +207,11 @@
 .swatch-vivid   { background: linear-gradient(135deg, #ec4899, #8b5cf6); }
 .swatch-warm    { background: linear-gradient(135deg, #fb923c, #b45309); }
 .swatch-vintage { background: linear-gradient(135deg, #d97706, #78350f); }
+.swatch-rose    { background: linear-gradient(135deg, #fda4af, #e11d48); }
+.swatch-mint    { background: linear-gradient(135deg, #6ee7b7, #0d9488); }
+.swatch-film    { background: linear-gradient(135deg, #a8a29e, #57534e); }
+.swatch-soft-bw { background: linear-gradient(135deg, #f4f4f5, #71717a); }
+.swatch-dreamy  { background: linear-gradient(135deg, #f0abfc, #818cf8); }
 
 /* --- Center Area (Video & Controls) --- */
 .cam-center-area {

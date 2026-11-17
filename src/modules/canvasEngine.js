@@ -65,13 +65,13 @@ export function setOnCanvasResize(callback) {
 }
 
 // Handle sizes
-const HANDLE_SIZE = 12; // รัศมีขั้นต่ำของจุดจับ (หน่วยพิกเซลของ canvas)
-const ROTATE_HANDLE_OFFSET = 30; // ระยะขั้นต่ำของจุดหมุนเหนือขอบบน
+const HANDLE_SIZE = 9; // รัศมีขั้นต่ำของจุดจับ (หน่วยพิกเซลของ canvas)
+const ROTATE_HANDLE_OFFSET = 22; // ระยะขั้นต่ำของจุดหมุนเหนือขอบบน
 
 // จุดจับต้องมีขนาดคงที่ "บนจอจริง" ไม่ใช่บนพิกัด canvas — canvas กว้าง 1280
 // แต่แสดงจริงราว 700-900px จุดจับเดิมจึงเหลือรัศมีแค่ ~7px กดไม่ติด
-const HANDLE_RADIUS_CSS = 15;
-const ROTATE_OFFSET_CSS = 34;
+const HANDLE_RADIUS_CSS = 10;
+const ROTATE_OFFSET_CSS = 26;
 let displayScale = 1; // canvas px ต่อ CSS px
 
 function refreshDisplayScale() {
@@ -650,7 +650,7 @@ function checkHandleHit(point, layer) {
   const { localX, localY, halfW, halfH } = toLayerLocal(point, layer);
 
   // ต้องใช้ค่าชุดเดียวกับตอนวาด ไม่งั้นพื้นที่กดจะเพี้ยนจากวงกลมที่เห็น
-  const hitR = getHandleRadius() + 6 * displayScale;
+  const hitR = Math.max(getHandleRadius() + 8 * displayScale, 18 * displayScale);
   const rotateOffset = getRotateOffset();
 
   // 1. Rotate Handle (0, -halfH - rotateOffset)

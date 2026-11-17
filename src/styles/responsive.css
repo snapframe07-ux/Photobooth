@@ -101,7 +101,34 @@
 .cutout-actions .btn { flex: 1 1 110px; }
 .strip-options, .strip-preview-wrap, .cam-center-area { min-width: 0; }
 .strip-options p, .strip-frame-choice span { overflow-wrap: anywhere; }
-.cam-header-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cam-header-title { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.cam-header-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.shot-retake-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  font-size: 0.9rem;
+}
+.shot-retake-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.cutout-advanced { margin: 10px 0; font-size: 0.9rem; }
+.cutout-advanced summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+#viewCamera.cam-clean-mode .aspect-ratio-group,
+#viewCamera.cam-clean-mode .filter-group,
+#viewCamera.cam-clean-mode .timer-group,
+#viewCamera.cam-clean-mode .brightness-group,
+#viewCamera.cam-clean-mode .zoom-ruler-container,
+#viewCamera.cam-clean-mode .cam-toolbar .btn-tool-icon {
+  display: none;
+}
+#viewCamera.cam-clean-mode .cam-toolbar {
+  justify-content: center;
+}
 
 @media (min-width: 681px) and (max-width: 899px) {
   .strip-setup { grid-template-columns: minmax(0, 1fr) 220px; padding: 24px; gap: 20px; }
@@ -129,9 +156,19 @@
   .cam-left-panel, .cam-right-panel { grid-row: 2; min-width: 0; }
   .cam-left-panel { grid-column: 1; }
   .cam-right-panel { grid-column: 2; }
-  .cam-preview-box { max-width: 100%; }
-  .editor-actions { flex-wrap: wrap; }
-  .editor-actions > .btn { flex: 0 0 auto; width: 100%; min-height: 48px; }
+  .cam-preview-box { max-width: 100%; max-height: 62dvh; }
+  #photoCanvas { max-height: 60dvh; width: auto; max-width: 100%; }
+  .editor-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .editor-actions > #btnExport {
+    grid-column: 1 / -1;
+    min-height: 54px;
+    font-size: 1.05rem;
+  }
+  .editor-actions > .btn { min-height: 46px; width: 100%; }
   .editor-sub-actions .btn { flex: 1 1 100%; min-height: 48px; }
   .modal-overlay { padding: 12px; }
   .modal-card { padding: 20px 16px; }

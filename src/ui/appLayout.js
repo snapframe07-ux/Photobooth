@@ -40,11 +40,11 @@ export function renderAppLayout(stickerCount) {
           <h1>เลือกกรอบให้ Photo Strip ของคุณ</h1>
           <p>ถ่ายทีละช็อต แล้วเรียงภาพจากบนลงล่างในกรอบที่เลือก</p>
           <div id="stripFrameChoices" class="strip-frame-choices" aria-label="เลือกกรอบรูป"></div>
-          <label for="stripCutoutMode">วิธีเจาะช่องกรอบที่เพิ่มเอง</label>
-          <select id="stripCutoutMode"><option value="auto">ตรวจหาอัตโนมัติ แล้วเลือกช่องก่อนเจาะ</option><option value="manual">เจาะช่องเองด้วยการคลิก</option></select>
+          <label for="stripCutoutMode">วิธีเจาะช่องใส่รูป (สำหรับกรอบที่เพิ่มเอง)</label>
+          <select id="stripCutoutMode"><option value="auto">อัตโนมัติ (แนะนำ)</option><option value="manual">เลือกเจาะเองบนภาพ</option></select>
           <label class="btn btn-secondary" for="stripFrameUpload">＋ เพิ่มกรอบเอง</label>
           <input id="stripFrameUpload" type="file" accept="image/png,image/webp,image/jpeg,.jpg,.jpeg" class="hidden-input" />
-          <p id="stripUploadStatus" role="status">รองรับ PNG, WebP และ JPG/JPEG ระบบจะตรวจหาช่องสีเรียบให้เลือกและปรับขอบก่อนเจาะ ตรวจตัวอย่างก่อนถ่าย กรอบใช้ได้ในรอบการเปิดเว็บนี้</p>
+          <p id="stripUploadStatus" role="status">รองรับ PNG, WebP และ JPG/JPEG อัปโหลดแล้วระบบจะช่วยหาช่องใส่รูปให้อัตโนมัติ (ใช้ได้ในรอบการเปิดเว็บนี้)</p>
           <label for="stripOrientation">การเรียงภาพในกรอบ</label>
           <select id="stripOrientation" aria-describedby="stripOrientationHint"><option value="vertical">แนวตั้ง (บนลงล่าง)</option><option value="horizontal">แนวนอน (4 ภาพจัดแบบ 2×2)</option></select>
           <p id="stripOrientationHint">แนวนอนเรียงจากซ้ายไปขวา เมื่อเลือก 4 ภาพจะจัดเป็น 2 แถว แถวละ 2 ภาพ</p>
@@ -61,7 +61,7 @@ export function renderAppLayout(stickerCount) {
     </section>
     <section class="view-section hidden" id="viewCamera">
       <div class="cam-studio-card">
-        <div class="cam-header-title"><span id="stripCameraSummary"></span> <button class="btn btn-secondary btn-sm" id="btnChangeStripFrame">เปลี่ยนกรอบ</button></div>
+        <div class="cam-header-title"><span id="stripCameraSummary"></span> <div class="cam-header-actions"><button class="btn btn-secondary btn-sm" id="btnToggleCamUI" type="button" aria-pressed="false">👁️ ซ่อนปุ่ม</button><button class="btn btn-secondary btn-sm" id="btnChangeStripFrame">เปลี่ยนกรอบ</button></div></div>
 
         <div class="cam-studio-wrapper">
           <!-- Film Holes Left & Right -->
@@ -197,22 +197,28 @@ export function renderAppLayout(stickerCount) {
           <div class="scroll-gallery" id="editorFilterRow"></div>
         </div>
 
+        <div class="shot-retake-bar hidden" id="shotRetakeBar">
+          <span>🔄 ถ่ายซ่อมเฉพาะช็อต:</span>
+          <div class="shot-retake-buttons" id="shotRetakeButtons"></div>
+        </div>
+
         <div class="editor-actions">
           <button class="btn btn-primary btn-large" id="btnExport">💾 ดาวน์โหลดภาพถ่าย</button>
+          <button class="btn btn-secondary" id="btnPrintPhoto" type="button">🖨️ พิมพ์รูปภาพ</button>
           <button class="btn btn-primary" id="btnSharePhoto">📤 แชร์ภาพไปโซเชียล</button>
           <button class="btn btn-secondary" id="btnCopyPhoto">📋 คัดลอกภาพ</button>
           <button class="btn btn-secondary" id="btnExportGif" disabled>🎞️ พรีวิว GIF</button>
           <dialog id="gifPreviewDialog" class="gif-preview-dialog" aria-labelledby="gifPreviewTitle">
             <h3 id="gifPreviewTitle">🎞️ พรีวิว GIF</h3>
             <img id="gifPreviewImage" alt="ตัวอย่าง GIF จากภาพถ่ายต่อเนื่อง" />
-            <p>เล่นวนภาพละ 0.5 วินาที รวมฟิลเตอร์ตอนถ่าย ไม่รวมกรอบและการแต่งภายหลัง</p>
+            <p>เล่นวนภาพละ 0.5 วินาที รวมฟิลเตอร์ กรอบ และสติกเกอร์ที่ตกแต่ง</p>
             <p id="gifPreviewStatus" role="status"></p>
             <div class="cutout-actions">
               <button class="btn btn-secondary" id="btnCloseGifPreview" type="button">ปิด</button>
               <button class="btn btn-primary" id="btnDownloadGif" type="button">💾 ดาวน์โหลด GIF</button>
             </div>
           </dialog>
-          <p id="gifStatus" role="status">GIF ใช้ภาพถ่ายต่อเนื่อง 2–4 ภาพ เล่นวนภาพละ 0.5 วินาที รวมฟิลเตอร์ตอนถ่าย ไม่รวมกรอบและการแต่งภายหลัง</p>
+          <p id="gifStatus" role="status">GIF ใช้ภาพถ่ายต่อเนื่อง 2–4 ภาพ เล่นวนภาพละ 0.5 วินาที รวมฟิลเตอร์ กรอบ และสติกเกอร์ที่ตกแต่ง</p>
           <p id="sharePhotoStatus" role="status"></p>
           <div class="editor-sub-actions">
             <button class="btn btn-secondary" id="btnSaveTemplate">☁️ บันทึกเป็นเทมเพลต Supabase</button>
@@ -342,24 +348,27 @@ export function renderAppLayout(stickerCount) {
   <div class="modal-overlay hidden" id="frameCutoutModal">
     <div class="modal-card cutout-card">
       <button class="btn-close" id="btnCloseCutoutModal">✖️</button>
-      <h3>✂️ เลือกช่องใส่รูป</h3>
-      <p class="subtitle">เลือกช่องที่ตรวจพบหรือแตะสองมุมเพื่อเพิ่มช่องสี่เหลี่ยม พื้นตารางคือส่วนที่เจาะเอง ส่วนช่องที่เลือกจากรายการจะเจาะเมื่อกดใช้กรอบนี้</p>
+      <h3>✂️ เลือกช่องใส่รูปในกรอบ</h3>
+      <p class="subtitle">1) แตะเลือกช่องที่ต้องการด้านล่าง (หรือแตะ 2 มุมบนภาพเพื่อตีกรอบสี่เหลี่ยมเอง) → 2) กด "ใช้กรอบนี้"</p>
 
       <div class="cutout-stage">
         <canvas id="frameCutoutCanvas"></canvas>
       </div>
 
       <div id="cutoutCandidates"></div>
-      <label for="cutoutSelectionMode">วิธีเลือกช่องภาพ</label>
-      <select id="cutoutSelectionMode">
-        <option value="rectangle">แตะสองมุมเพื่อเจาะช่องสี่เหลี่ยม (เหมาะกับกรอบลายรอบขอบ)</option>
-        <option value="color">แตะเพื่อลบพื้นที่สีเดียวกัน (เช่น พื้นสีเขียว)</option>
-      </select>
+      <details class="cutout-advanced">
+        <summary>ตั้งค่าเพิ่มเติม (สำหรับกรอบสีทึบ)</summary>
+        <label for="cutoutSelectionMode">วิธีเลือกช่องภาพ</label>
+        <select id="cutoutSelectionMode">
+          <option value="rectangle">แตะสองมุมเพื่อเจาะช่องสี่เหลี่ยม (แนะนำ)</option>
+          <option value="color">แตะเพื่อลบพื้นที่สีเดียวกัน (เช่น พื้นสีเขียว)</option>
+        </select>
 
-      <label class="cutout-tolerance">
-        <span>ความไว: <b id="cutoutToleranceValue">30</b></span>
-        <input type="range" id="cutoutTolerance" min="10" max="90" step="5" value="30">
-      </label>
+        <label class="cutout-tolerance">
+          <span>ความไวในการลบสี: <b id="cutoutToleranceValue">30</b></span>
+          <input type="range" id="cutoutTolerance" min="10" max="90" step="5" value="30">
+        </label>
+      </details>
 
       <div class="cutout-actions">
         <button class="btn btn-sm btn-secondary" id="btnCutoutReset">↩️ ล้างทั้งหมด</button>

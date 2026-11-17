@@ -33,3 +33,31 @@ export async function sharePhoto(dataUrl, filename = 'snapframe-photo.png') {
     throw error;
   }
 }
+
+export async function printPhoto(dataUrl, win = globalThis.window, doc = globalThis.document) {
+  photoFile(dataUrl);
+  if (typeof win?.print !== 'function' || !doc?.body) return 'unsupported';
+  let mount = doc.querySelector('#printMount');
+  if (!mount) {
+    mount = doc.createElement('div');
+    mount.id = 'printMount';
+    mount.className = 'print-mount';
+    const img = doc.createElement('img');
+    img.id = 'printImage';
+    img.alt = 'ภาพสำหรับพิมพ์';
+    mount.append(img);
+    doc.body.append(mount);
+  }
+  const img = mount.querySelector('img');
+  img.removeAttribute?.('src');
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = () => reject(new Error('โหลดภาพสำหรับพิมพ์ไม่สำเร็จ'));
+    img.src = dataUrl;
+  });
+  if (typeof img.decode === 'function') {
+    try { await img.decode(); } catch (_) {}
+  }
+  win.print();
+  return 'printed';
+}

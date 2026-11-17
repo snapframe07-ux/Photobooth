@@ -10,6 +10,8 @@ import frameMinimalistBlack from '../assets/frames/minimalist-black.svg';
 import frameComicPop from '../assets/frames/comic-pop.svg';
 import frameLoveRomance from '../assets/frames/love-romance.svg';
 import frameFestiveSparkle from '../assets/frames/festive-sparkle.svg';
+import frameY2kChrome from '../assets/frames/y2k-chrome.svg';
+import framePolaroidCream from '../assets/frames/polaroid-cream.svg';
 
 // Assets: 10 Stickers
 import stickerStar from '../assets/stickers/star.svg';
@@ -34,7 +36,9 @@ export const FRAMES_CATALOG = [
   { id: 'minimalist-black', name: 'Minimalist Black', src: frameMinimalistBlack },
   { id: 'comic-pop', name: 'Comic Pop Art', src: frameComicPop },
   { id: 'love-romance', name: 'Love & Romance', src: frameLoveRomance },
-  { id: 'festive-sparkle', name: 'Festive Sparkle', src: frameFestiveSparkle }
+  { id: 'festive-sparkle', name: 'Festive Sparkle', src: frameFestiveSparkle },
+  { id: 'y2k-chrome', name: 'Y2K Chrome', src: frameY2kChrome },
+  { id: 'polaroid-cream', name: 'Polaroid Cream', src: framePolaroidCream }
 ];
 
 export const STICKERS_CATALOG = [
@@ -57,6 +61,11 @@ export const FILTERS_CATALOG = [
   { id: 'noir', name: 'Noir', css: 'grayscale(1) contrast(1.2) brightness(0.95)', class: 'swatch-noir' },
   { id: 'vivid', name: 'Vivid', css: 'saturate(1.8) contrast(1.1)', class: 'swatch-vivid' },
   { id: 'warm', name: 'Warm', css: 'sepia(0.2) saturate(1.3) hue-rotate(-10deg)', class: 'swatch-warm' },
-  { id: 'vintage', name: 'Vintage', css: 'sepia(0.5) contrast(1.15) brightness(0.9)', class: 'swatch-vintage' }
+  { id: 'vintage', name: 'Vintage', css: 'sepia(0.5) contrast(1.15) brightness(0.9)', class: 'swatch-vintage' },
+  { id: 'rose', name: 'Rose Glow', css: 'sepia(0.18) saturate(1.25) brightness(1.06) hue-rotate(-18deg)', class: 'swatch-rose' },
+  { id: 'mint', name: 'Cool Mint', css: 'hue-rotate(25deg) saturate(1.15) brightness(1.06)', class: 'swatch-mint' },
+  { id: 'film', name: 'Analog Film', css: 'contrast(1.18) saturate(0.85) sepia(0.22) brightness(0.98)', class: 'swatch-film' },
+  { id: 'soft-bw', name: 'Soft B&W', css: 'grayscale(1) contrast(0.95) brightness(1.08)', class: 'swatch-soft-bw' },
+  { id: 'dreamy', name: 'Dreamy', css: 'brightness(1.12) contrast(0.92) saturate(1.3)', class: 'swatch-dreamy' }
 ];
 

@@ -1,4 +1,4 @@
-import { sharePhoto, copyPhoto, isMobilePhotoDevice } from './modules/photoShare.js';
+import { sharePhoto, copyPhoto, printPhoto, isMobilePhotoDevice } from './modules/photoShare.js';
 import { snapshotGifFrame, readGifFrames, encodePhotoGif } from './modules/photoGif.js';
 import { FRAMES_CATALOG, STICKERS_CATALOG, FILTERS_CATALOG } from './data/catalogs.js';
 import { renderAppLayout } from './ui/appLayout.js';
@@ -60,6 +60,10 @@ let usingCssZoom = true;
 let activeEditorFilter = 'none';   // ฟิลเตอร์ที่ใช้กับ base layer ในหน้าตกแต่ง
 let activeBurstCount = 4;
 let gifPhotos = [];
+let capturedFrames = [];
+let capturedGifFrames = [];
+let capturedContext = null;
+let retakingShotIndex = null;
 
 function setGifPhotos(photos) {
   gifPhotos = photos;
@@ -443,7 +447,7 @@ function switchTab(tabName) {
   }
 }
 
-tabCamera.addEventListener('click', () => switchTab('camera'));
+tabCamera.addEventListener('click', () => { retakingShotIndex = null; switchTab('camera'); });
 tabEditor.addEventListener('click', () => switchTab('editor'));
 tabTemplateGallery.addEventListener('click', () => switchTab('templates'));
 tabGallery.addEventListener('click', () => switchTab('gallery'));
@@ -1128,39 +1132,47 @@ async function handleStickerUpload(e) {
   if (!file) return;
 
   hideError();
+  stickerUploader.disabled = true;
+  chkRemoveBg.disabled = true;
   let finalBlob = file;
 
-  if (chkRemoveBg.checked) {
-    try {
-      updateProgress(10, 'กำลังประมวลผลระบบตัดพื้นหลัง...');
-      finalBlob = await removeBackground(file, {
-        onProgress: ({ progress, message }) => updateProgress(progress, message),
-        onError: (err) => showError(`ไม่สามารถตัดพื้นหลังได้: ${err.message}`)
-      });
-    } catch (err) {
-      console.warn('Background removal failed:', err);
-      finalBlob = file;
-    } finally {
-      setTimeout(hideProgress, 1200);
+  try {
+    if (chkRemoveBg.checked) {
+      try {
+        updateProgress(10, 'กำลังประมวลผลระบบตัดพื้นหลัง...');
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        finalBlob = await removeBackground(file, {
+          onProgress: ({ progress, message }) => updateProgress(progress, message),
+          onError: (err) => showError(`ไม่สามารถตัดพื้นหลังได้: ${err.message}`)
+        });
+      } catch (err) {
+        console.warn('Background removal failed:', err);
+        finalBlob = file;
+      } finally {
+        setTimeout(hideProgress, 1200);
+      }
     }
+
+    lastUploadedStickerBlob = finalBlob;
+    lastUploadedStickerUrl = URL.createObjectURL(finalBlob);
+
+    await addLayer({
+      type: 'sticker',
+      image: lastUploadedStickerUrl,
+      id: `custom-sticker-${Date.now()}`,
+      x: 500,
+      y: 300,
+      scale: 1,
+      rotation: 0
+    });
+
+    btnSaveCustomSticker.classList.remove('hidden');
+    refreshLayerListUI();
+  } finally {
+    stickerUploader.value = '';
+    stickerUploader.disabled = false;
+    chkRemoveBg.disabled = false;
   }
-
-  lastUploadedStickerBlob = finalBlob;
-  lastUploadedStickerUrl = URL.createObjectURL(finalBlob);
-
-  await addLayer({
-    type: 'sticker',
-    image: lastUploadedStickerUrl,
-    id: `custom-sticker-${Date.now()}`,
-    x: 500,
-    y: 300,
-    scale: 1,
-    rotation: 0
-  });
-
-  btnSaveCustomSticker.classList.remove('hidden');
-  stickerUploader.value = '';
-  refreshLayerListUI();
 }
 
 stickerUploader.addEventListener('change', handleStickerUpload);
@@ -1584,6 +1596,11 @@ btnSwitch?.addEventListener('click', handleSwitchCamera);
 btnCapture?.addEventListener('click', handleCapture);
 btnRetake?.addEventListener('click', () => {
   setGifPhotos([]);
+  capturedFrames = [];
+  capturedGifFrames = [];
+  capturedContext = null;
+  retakingShotIndex = null;
+  renderShotRetakeBar();
   // ล้างสติกเกอร์ของช็อตที่แล้ว แต่คงกรอบไว้ (กรอบมักเป็นธีมของงานที่ใช้ซ้ำทุกช็อต)
   // ของเดิมแค่สลับแท็บ สติกเกอร์เก่าจึงค้างติดไปกับภาพใหม่
   getLayers()
@@ -1610,7 +1627,10 @@ document.querySelector('#btnExportGif').addEventListener('click', async event =>
   const photos = gifPhotos;
   button.disabled = true;
   try {
-    const blob = await encodePhotoGif(readGifFrames(photos), (current, total) => {
+    const frameOverlay = getLayers().find(l => l.type === 'frame')?.image || null;
+    const stickers = getLayers().filter(l => l.type === 'sticker');
+    const sourceSize = { width: canvasElement.width, height: canvasElement.height };
+    const blob = await encodePhotoGif(readGifFrames(photos, frameOverlay, stickers, sourceSize), (current, total) => {
       status.textContent = `กำลังสร้าง GIF ${current}/${total}…`;
     });
     const dataUrl = await new Promise((resolve, reject) => {
@@ -1680,6 +1700,23 @@ document.querySelector('#btnSharePhoto').addEventListener('click', async event =
     }
   } catch (error) {
     status.textContent = `แชร์ภาพไม่สำเร็จ: ${error.message} ลองกดบันทึกภาพแล้วแนบไฟล์ในแอปแชต`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.querySelector('#btnPrintPhoto').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  const status = document.querySelector('#sharePhotoStatus');
+  button.disabled = true;
+  status.textContent = '';
+  try {
+    const result = await printPhoto(exportImage('image/png'));
+    status.textContent = result === 'printed'
+      ? 'เปิดหน้าต่างพิมพ์แล้ว เลือกเครื่องพิมพ์และขนาดกระดาษที่ต้องการ'
+      : 'เบราว์เซอร์นี้ไม่รองรับการสั่งพิมพ์โดยตรง กรุณาดาวน์โหลดภาพแล้วสั่งพิมพ์จากเครื่อง';
+  } catch (error) {
+    status.textContent = `สั่งพิมพ์ไม่สำเร็จ: ${error.message}`;
   } finally {
     button.disabled = false;
   }
@@ -1792,6 +1829,30 @@ function renderStripPreview(preview) {
   }
 }
 
+function renderShotRetakeBar() {
+  const bar = document.querySelector('#shotRetakeBar');
+  const container = document.querySelector('#shotRetakeButtons');
+  if (!bar || !container) return;
+  if (capturedFrames.length < 2) {
+    bar.classList.add('hidden');
+    container.replaceChildren();
+    return;
+  }
+  bar.classList.remove('hidden');
+  container.replaceChildren(...capturedFrames.map((_, index) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-sm btn-secondary';
+    btn.textContent = `ช็อต ${index + 1}`;
+    btn.addEventListener('click', () => {
+      retakingShotIndex = index;
+      switchTab('camera');
+      updateStatus(true, `ถ่ายซ่อมช็อตที่ ${index + 1}/${capturedFrames.length} — กดปุ่มถ่ายภาพ`);
+    });
+    return btn;
+  }));
+}
+
 async function handleCapture() {
   if (isCapturing || isChangingCamera) return;
   if (!videoElement.videoWidth || videoElement.readyState < 2) {
@@ -1800,12 +1861,14 @@ async function handleCapture() {
   }
   hideError();
   isCapturing = true;
-  setGifPhotos([]);
+  const singleRetakeIndex = retakingShotIndex !== null && capturedFrames[retakingShotIndex] && capturedContext
+    ? retakingShotIndex : null;
+  if (singleRetakeIndex === null) setGifPhotos([]);
   const controls = [...document.querySelectorAll('.nav-tabs button, #viewCamera button, #viewCamera input, #viewCamera select')];
   const disabledStates = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });
   const count = activeCaptureTemplate?.capture.count || activeBurstCount;
-  const frameLayout = selectedStripFrame?.layout || null;
+  const frameLayout = singleRetakeIndex !== null ? capturedContext.frameLayout : (selectedStripFrame?.layout || null);
   const aspect = currentAspectRatio.split(':').map(Number);
   const filterCss = FILTERS_CATALOG[activeFilterIndex].css;
   const filterOptions = {
@@ -1814,36 +1877,65 @@ async function handleCapture() {
   };
   let completed = false;
   try {
-    const decoration = await loadStripDecoration();
-    const savedFrame = serializeCaptureFrame(selectedStripFrame, decoration,
-      frameLayout || getStripLayout(count, 960, aspect[0] / aspect[1], stripOrientation));
-    const frames = [];
-    const animationFrames = [];
-    for (let i = 1; i <= count; i++) {
-      if (frameLayout) {
-        const slot = frameLayout.slots[i - 1];
+    if (singleRetakeIndex !== null) {
+      const slot = frameLayout?.slots[singleRetakeIndex];
+      if (slot) {
         previewBox.style.aspectRatio = `${slot.width} / ${slot.height}`;
         filterOptions.crop = getCaptureCrop(slot.width / slot.height);
       }
       countdownOverlay.classList.add('active');
-      updateStatus(true, `กำลังถ่ายภาพ ${i}/${count}`);
+      updateStatus(true, `กำลังถ่ายซ่อมช็อต ${singleRetakeIndex + 1}/${capturedFrames.length}`);
       await new Promise(resolve => startCountdown(activeTimerSeconds, remaining => {
-        countdownNumber.textContent = remaining > 0 ? `${remaining}s (📸 ${i}/${count})` : `📸 ${i}/${count}`;
+        countdownNumber.textContent = remaining > 0
+          ? `${remaining}s (📸 ${singleRetakeIndex + 1}/${capturedFrames.length})`
+          : `📸 ${singleRetakeIndex + 1}/${capturedFrames.length}`;
       }, resolve));
-      frames.push(captureSingleFrame(filterOptions));
-      animationFrames.push(snapshotGifFrame(frames[frames.length - 1]));
-      if (i < count) await new Promise(resolve => setTimeout(resolve, activeTimerSeconds > 0 ? 500 : 300));
+      const newFrame = captureSingleFrame(filterOptions);
+      capturedFrames[singleRetakeIndex] = newFrame;
+      capturedGifFrames[singleRetakeIndex] = snapshotGifFrame(newFrame, frameLayout ? null : capturedContext.decoration);
+      const strip = composePhotoStrip(capturedFrames, capturedContext.decoration, capturedContext.aspectRatio, frameLayout, capturedContext.stripOrientation);
+      setTargetCanvas(canvasElement);
+      setBaseLayerImage(strip);
+      setGifPhotos([...capturedGifFrames]);
+      retakingShotIndex = null;
+      completed = true;
+    } else {
+      const decoration = await loadStripDecoration();
+      const savedFrame = serializeCaptureFrame(selectedStripFrame, decoration,
+        frameLayout || getStripLayout(count, 960, aspect[0] / aspect[1], stripOrientation));
+      const frames = [];
+      const animationFrames = [];
+      for (let i = 1; i <= count; i++) {
+        if (frameLayout) {
+          const slot = frameLayout.slots[i - 1];
+          previewBox.style.aspectRatio = `${slot.width} / ${slot.height}`;
+          filterOptions.crop = getCaptureCrop(slot.width / slot.height);
+        }
+        countdownOverlay.classList.add('active');
+        updateStatus(true, `กำลังถ่ายภาพ ${i}/${count}`);
+        await new Promise(resolve => startCountdown(activeTimerSeconds, remaining => {
+          countdownNumber.textContent = remaining > 0 ? `${remaining}s (📸 ${i}/${count})` : `📸 ${i}/${count}`;
+        }, resolve));
+        frames.push(captureSingleFrame(filterOptions));
+        // shortcut: multi-slot custom frames are strip layouts, not single-photo borders; upgrade if per-slot GIF composition is needed
+        animationFrames.push(snapshotGifFrame(frames[frames.length - 1], frameLayout ? null : decoration));
+        if (i < count) await new Promise(resolve => setTimeout(resolve, activeTimerSeconds > 0 ? 500 : 300));
+      }
+      const strip = composePhotoStrip(frames, decoration, aspect[0] / aspect[1], frameLayout, stripOrientation);
+      setTargetCanvas(canvasElement);
+      getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id));
+      setBaseLayerImage(strip);
+      if (activeCaptureTemplate) await loadTemplateDesign(activeCaptureTemplate.design);
+      capturedFrames = frames;
+      capturedGifFrames = animationFrames;
+      capturedContext = { decoration, aspectRatio: aspect[0] / aspect[1], frameLayout, stripOrientation };
+      renderShotRetakeBar();
+      setGifPhotos(animationFrames);
+      lastCaptureSettings = { count, orientation: stripOrientation, aspect: currentAspectRatio, frame: savedFrame };
+      activeEditorFilter = 'none';
+      renderEditorFilterRow();
+      completed = true;
     }
-    const strip = composePhotoStrip(frames, decoration, aspect[0] / aspect[1], frameLayout, stripOrientation);
-    setTargetCanvas(canvasElement);
-    getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id));
-    setBaseLayerImage(strip);
-    if (activeCaptureTemplate) await loadTemplateDesign(activeCaptureTemplate.design);
-    setGifPhotos(animationFrames);
-    lastCaptureSettings = { count, orientation: stripOrientation, aspect: currentAspectRatio, frame: savedFrame };
-    activeEditorFilter = 'none';
-    renderEditorFilterRow();
-    completed = true;
   } catch (err) {
     showError(`เกิดข้อผิดพลาดในการถ่ายภาพ: ${err.message}`);
   } finally {
@@ -1870,6 +1962,12 @@ function loadStripDecoration(frame = selectedStripFrame) {
 
 document.querySelector('#tabSetup').addEventListener('click', () => switchTab('setup'));
 document.querySelector('#btnChangeStripFrame').addEventListener('click', () => switchTab('setup'));
+document.querySelector('#btnToggleCamUI')?.addEventListener('click', event => {
+  const cameraView = document.querySelector('#viewCamera');
+  const isClean = cameraView.classList.toggle('cam-clean-mode');
+  event.currentTarget.setAttribute('aria-pressed', String(isClean));
+  event.currentTarget.textContent = isClean ? '👁️ แสดงปุ่ม' : '👁️ ซ่อนปุ่ม';
+});
 document.querySelector('#btnBeginStrip').addEventListener('click', () => {
   hasChosenStrip = true;
   switchTab('camera');

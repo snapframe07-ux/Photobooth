@@ -1,4 +1,4 @@
-export function snapshotGifFrame(photo) {
+export function snapshotGifFrame(photo, decoration = null) {
   const scale = Math.min(1, 640 / Math.max(photo.width, photo.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(photo.width * scale));
@@ -7,6 +7,7 @@ export function snapshotGifFrame(photo) {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(photo, 0, 0, canvas.width, canvas.height);
+  if (decoration) ctx.drawImage(decoration, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
 
@@ -32,7 +33,7 @@ export async function encodePhotoGif(frames, onProgress = () => {}) {
   return new Blob([gif.bytes()], { type: 'image/gif' });
 }
 
-export function readGifFrames(photos) {
+export function readGifFrames(photos, decoration = null, stickers = [], sourceSize = null) {
   if (photos.length < 2) throw new Error('กรุณาถ่ายต่อเนื่องอย่างน้อย 2 ภาพ');
   const canvas = document.createElement('canvas');
   canvas.width = photos[0].width;
@@ -45,6 +46,20 @@ export function readGifFrames(photos) {
     const scale = Math.min(canvas.width / photo.width, canvas.height / photo.height);
     const w = photo.width * scale, h = photo.height * scale;
     ctx.drawImage(photo, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+    if (decoration) ctx.drawImage(decoration, 0, 0, canvas.width, canvas.height);
+    if (stickers.length && sourceSize?.width > 0 && sourceSize?.height > 0) {
+      // shortcut: maps editor sticker positions proportionally to GIF frame size; upgrade for per-slot strip clipping
+      const s = Math.min(canvas.width / sourceSize.width, canvas.height / sourceSize.height);
+      for (const layer of stickers) {
+        if (!layer.image) continue;
+        ctx.save();
+        ctx.globalAlpha = layer.opacity ?? 1;
+        ctx.translate((layer.x / sourceSize.width) * canvas.width, (layer.y / sourceSize.height) * canvas.height);
+        ctx.rotate((layer.rotation || 0) * Math.PI / 180);
+        ctx.drawImage(layer.image, -(layer.width * s) / 2, -(layer.height * s) / 2, layer.width * s, layer.height * s);
+        ctx.restore();
+      }
+    }
     return ctx.getImageData(0, 0, canvas.width, canvas.height);
   });
 }
