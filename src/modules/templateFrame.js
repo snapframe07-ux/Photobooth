@@ -1,6 +1,15 @@
+import { isBuiltinFrame, buildBuiltinFrameDataUrl } from './builtinFrames.js';
+
 // Persist only the transparent decoration, never the captured photo or a session blob URL.
 export function serializeCaptureFrame(frame, decoration, outputLayout) {
   if (!frame || !decoration) return null;
+  if (isBuiltinFrame(frame.id) && !frame.layout) {
+    return {
+      builtinId: frame.id,
+      name: frame.name,
+      layout: null
+    };
+  }
   const canvas = document.createElement('canvas');
   canvas.width = outputLayout.width;
   canvas.height = outputLayout.height;
@@ -12,9 +21,31 @@ export function serializeCaptureFrame(frame, decoration, outputLayout) {
   };
 }
 
+export function renderFrameToBlob(decoration, outputLayout) {
+  if (!decoration || !outputLayout) return Promise.resolve(null);
+  const canvas = document.createElement('canvas');
+  canvas.width = outputLayout.width;
+  canvas.height = outputLayout.height;
+  canvas.getContext('2d').drawImage(decoration, 0, 0, canvas.width, canvas.height);
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+}
+
+function isValidPersistedFrameSrc(src) {
+  if (typeof src !== 'string') return false;
+  return src.startsWith('data:image/png;base64,') || /^https?:\/\/.+/.test(src);
+}
+
 export function restoreCaptureFrame(saved, count) {
   if (!saved) return null;
-  if (typeof saved.src !== 'string' || !saved.src.startsWith('data:image/png;base64,')) {
+  if (saved.builtinId && isBuiltinFrame(saved.builtinId)) {
+    return {
+      id: saved.builtinId,
+      name: saved.name || 'กรอบเทมเพลต',
+      src: buildBuiltinFrameDataUrl(saved.builtinId, 1280, 720),
+      layout: null
+    };
+  }
+  if (!isValidPersistedFrameSrc(saved.src)) {
     throw new Error('รูปกรอบในเทมเพลตไม่สมบูรณ์ กรุณาให้เจ้าของบันทึกเทมเพลตใหม่');
   }
   const layout = saved.layout;

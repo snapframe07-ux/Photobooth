@@ -16,11 +16,167 @@ let selectedLayerId = null;
 let isRenderScheduled = false;
 
 // Interaction State
-let activeAction = null; // 'drag' | 'rotate' | 'scale' | null
+let activeAction = null; // 'drag' | 'rotate' | 'scale' | 'pinch' | 'draw' | null
 let dragStart = { x: 0, y: 0 };
 let layerInitialState = null;
 let onSelectionChangeCallback = null;
 let onCanvasResizeCallback = null;
+let onHistoryChangeCallback = null;
+
+// Multi-touch Pinch-to-Zoom & Rotate State
+const activePointers = new Map();
+let pinchState = null;
+
+// Doodle (Brush Pen) State
+let doodleCanvas = null;
+let doodleCtx = null;
+let hasDoodleContent = false;
+const drawState = {
+  active: false,
+  color: '#ec4899',
+  size: 10,
+  eraser: false,
+  lastPoint: null
+};
+
+// Undo / Redo History State
+const MAX_HISTORY = 30;
+let undoStack = [];
+let redoStack = [];
+
+function ensureDoodleCanvas(w, h) {
+  if (!doodleCanvas) {
+    doodleCanvas = document.createElement('canvas');
+    doodleCanvas.width = w;
+    doodleCanvas.height = h;
+    doodleCtx = doodleCanvas.getContext('2d');
+    return;
+  }
+  if (doodleCanvas.width === w && doodleCanvas.height === h) return;
+  const prev = document.createElement('canvas');
+  prev.width = doodleCanvas.width;
+  prev.height = doodleCanvas.height;
+  prev.getContext('2d').drawImage(doodleCanvas, 0, 0);
+  doodleCanvas.width = w;
+  doodleCanvas.height = h;
+  doodleCtx = doodleCanvas.getContext('2d');
+  if (hasDoodleContent) {
+    doodleCtx.drawImage(prev, 0, 0, w, h);
+  }
+}
+
+function cloneDoodleSnapshot() {
+  if (!doodleCanvas || !hasDoodleContent) return null;
+  const snap = document.createElement('canvas');
+  snap.width = doodleCanvas.width;
+  snap.height = doodleCanvas.height;
+  snap.getContext('2d').drawImage(doodleCanvas, 0, 0);
+  return snap;
+}
+
+function captureSnapshot() {
+  return {
+    layers: layers.filter(l => l.type !== 'base').map(l => ({ ...l })),
+    doodle: cloneDoodleSnapshot(),
+    hasDoodleContent
+  };
+}
+
+function restoreSnapshot(snap) {
+  const baseLayers = layers.filter(l => l.type === 'base');
+  layers = [...baseLayers, ...snap.layers.map(l => ({ ...l }))];
+  if (selectedLayerId && !layers.some(l => l.id === selectedLayerId)) {
+    selectedLayerId = null;
+  }
+  if (targetCanvas) {
+    ensureDoodleCanvas(targetCanvas.width, targetCanvas.height);
+    doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height);
+    if (snap.doodle) {
+      doodleCtx.drawImage(snap.doodle, 0, 0, doodleCanvas.width, doodleCanvas.height);
+    }
+    hasDoodleContent = Boolean(snap.hasDoodleContent && snap.doodle);
+  }
+  if (typeof onSelectionChangeCallback === 'function') onSelectionChangeCallback(selectedLayerId);
+  notifyHistoryChange();
+  scheduleRender();
+}
+
+function notifyHistoryChange() {
+  if (typeof onHistoryChangeCallback === 'function') {
+    onHistoryChangeCallback({ canUndo: undoStack.length > 0, canRedo: redoStack.length > 0 });
+  }
+}
+
+function pushUndoSnapshot() {
+  undoStack.push(captureSnapshot());
+  if (undoStack.length > MAX_HISTORY) undoStack.shift();
+  redoStack = [];
+  notifyHistoryChange();
+}
+
+export function setOnHistoryChange(callback) {
+  onHistoryChangeCallback = callback;
+  notifyHistoryChange();
+}
+
+export function canUndo() {
+  return undoStack.length > 0;
+}
+
+export function canRedo() {
+  return redoStack.length > 0;
+}
+
+export function undo() {
+  if (!undoStack.length) return false;
+  redoStack.push(captureSnapshot());
+  const prev = undoStack.pop();
+  restoreSnapshot(prev);
+  return true;
+}
+
+export function redo() {
+  if (!redoStack.length) return false;
+  undoStack.push(captureSnapshot());
+  const next = redoStack.pop();
+  restoreSnapshot(next);
+  return true;
+}
+
+export function resetHistory() {
+  undoStack = [];
+  redoStack = [];
+  notifyHistoryChange();
+}
+
+export function setDrawMode(active, options = {}) {
+  drawState.active = Boolean(active);
+  if (options.color !== undefined) drawState.color = options.color;
+  if (options.size !== undefined) drawState.size = Math.max(2, Math.min(48, Number(options.size) || 10));
+  if (options.eraser !== undefined) drawState.eraser = Boolean(options.eraser);
+  if (drawState.active) {
+    selectLayer(null);
+  }
+  if (targetCanvas) {
+    targetCanvas.style.cursor = drawState.active ? 'crosshair' : '';
+  }
+}
+
+export function isDrawMode() {
+  return drawState.active;
+}
+
+export function clearDoodle() {
+  if (!doodleCanvas || !doodleCtx || !hasDoodleContent) return;
+  pushUndoSnapshot();
+  doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height);
+  hasDoodleContent = false;
+  scheduleRender();
+}
+
+export function getDoodleCanvas() {
+  return hasDoodleContent ? doodleCanvas : null;
+}
 
 /**
  * ตั้งขนาด canvas แล้วแจ้งผู้เรียก (ใช้ปรับกล่องแสดงผลให้ยืดตามภาพจริง)
@@ -29,6 +185,7 @@ function resizeCanvas(width, height) {
   if (!targetCanvas) return;
   const w = Math.max(1, Math.round(width));
   const h = Math.max(1, Math.round(height));
+  ensureDoodleCanvas(w, h);
   if (targetCanvas.width === w && targetCanvas.height === h) return;
 
   targetCanvas.width = w;
@@ -324,6 +481,7 @@ export async function addLayer(layerData) {
 
   const layer = {
     id: layerData.id || `layer-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    label: layerData.label || null,
     type: layerData.type,
     src: typeof imageSrc === 'string' ? imageSrc : (loadedImg.src || null),
     image: loadedImg,
@@ -338,6 +496,8 @@ export async function addLayer(layerData) {
     opacity: layerData.opacity !== undefined ? layerData.opacity : 1,
     zIndex: layerData.zIndex || 0
   };
+
+  if (layer.type !== 'base') pushUndoSnapshot();
 
   if (layer.type === 'frame') {
     const frameIndex = layers.findIndex(l => l.type === 'frame');
@@ -358,7 +518,10 @@ export async function addLayer(layerData) {
 /**
  * Removes a layer by ID.
  */
-export function removeLayer(id) {
+export function removeLayer(id, { recordHistory = true } = {}) {
+  const target = layers.find(l => l.id === id);
+  if (!target) return;
+  if (recordHistory && target.type !== 'base') pushUndoSnapshot();
   const prevLength = layers.length;
   layers = layers.filter(l => l.id !== id);
   if (selectedLayerId === id) {
@@ -413,9 +576,16 @@ export function renderCanvas() {
   const frameLayers = layers.filter(l => l.type === 'frame');
 
   const orderedLayers = [...baseLayers, ...stickerLayers, ...frameLayers];
+  let doodleDrawn = false;
 
   orderedLayers.forEach(layer => {
     if (!layer.image) return;
+
+    // Draw doodle strokes above stickers and below frames
+    if (!doodleDrawn && layer.type === 'frame' && doodleCanvas && hasDoodleContent) {
+      ctx.drawImage(doodleCanvas, 0, 0, targetCanvas.width, targetCanvas.height);
+      doodleDrawn = true;
+    }
 
     ctx.save();
     ctx.globalAlpha = layer.opacity !== undefined ? layer.opacity : 1;
@@ -452,6 +622,10 @@ export function renderCanvas() {
       renderSelectionOverlay(layer);
     }
   });
+
+  if (!doodleDrawn && doodleCanvas && hasDoodleContent) {
+    ctx.drawImage(doodleCanvas, 0, 0, targetCanvas.width, targetCanvas.height);
+  }
 }
 
 /**
@@ -543,9 +717,70 @@ function getCanvasCoordinates(e) {
   };
 }
 
+function drawDoodleSegment(from, to) {
+  if (!targetCanvas) return;
+  ensureDoodleCanvas(targetCanvas.width, targetCanvas.height);
+  doodleCtx.save();
+  doodleCtx.lineCap = 'round';
+  doodleCtx.lineJoin = 'round';
+  doodleCtx.lineWidth = drawState.size * Math.max(1, targetCanvas.width / 960);
+  if (drawState.eraser) {
+    doodleCtx.globalCompositeOperation = 'destination-out';
+    doodleCtx.strokeStyle = 'rgba(0,0,0,1)';
+  } else {
+    doodleCtx.globalCompositeOperation = 'source-over';
+    doodleCtx.strokeStyle = drawState.color;
+  }
+  doodleCtx.beginPath();
+  doodleCtx.moveTo(from.x, from.y);
+  doodleCtx.lineTo(to.x, to.y);
+  doodleCtx.stroke();
+  doodleCtx.restore();
+  hasDoodleContent = true;
+}
+
+function getPinchMetrics() {
+  const pts = [...activePointers.values()];
+  if (pts.length < 2) return null;
+  const [a, b] = pts;
+  const dist = Math.hypot(b.x - a.x, b.y - a.y);
+  const angle = Math.atan2(b.y - a.y, b.x - a.x);
+  return { dist: Math.max(1, dist), angle };
+}
+
 function handlePointerDown(e) {
   refreshDisplayScale();
   const coords = getCanvasCoordinates(e);
+  activePointers.set(e.pointerId, coords);
+
+  // Freehand Doodle Mode
+  if (drawState.active) {
+    pushUndoSnapshot();
+    activeAction = 'draw';
+    drawState.lastPoint = coords;
+    drawDoodleSegment(coords, { x: coords.x + 0.1, y: coords.y + 0.1 });
+    targetCanvas.setPointerCapture(e.pointerId);
+    scheduleRender();
+    return;
+  }
+
+  // Two-finger Pinch-to-Zoom & Rotate on selected non-base layer
+  if (activePointers.size === 2 && selectedLayerId) {
+    const selLayer = layers.find(l => l.id === selectedLayerId);
+    const metrics = getPinchMetrics();
+    if (selLayer && selLayer.type !== 'base' && metrics) {
+      if (!activeAction) pushUndoSnapshot();
+      activeAction = 'pinch';
+      pinchState = {
+        initialDist: metrics.dist,
+        initialAngle: metrics.angle,
+        initialScale: selLayer.scale || 1,
+        initialRotation: selLayer.rotation || 0
+      };
+      targetCanvas.setPointerCapture(e.pointerId);
+      return;
+    }
+  }
 
   // Check handles of selected layer first
   if (selectedLayerId) {
@@ -557,6 +792,7 @@ function handlePointerDown(e) {
           removeLayer(selLayer.id);
           return;
         }
+        pushUndoSnapshot();
         activeAction = handleHit;
         dragStart = coords;
         layerInitialState = { ...selLayer };
@@ -584,6 +820,7 @@ function handlePointerDown(e) {
 
   if (hitLayer) {
     selectLayer(hitLayer.id);
+    pushUndoSnapshot();
     activeAction = 'drag';
     dragStart = coords;
     layerInitialState = { ...hitLayer };
@@ -594,12 +831,35 @@ function handlePointerDown(e) {
 }
 
 function handlePointerMove(e) {
+  const coords = getCanvasCoordinates(e);
+  if (activePointers.has(e.pointerId)) {
+    activePointers.set(e.pointerId, coords);
+  }
+
+  if (activeAction === 'draw' && drawState.lastPoint) {
+    drawDoodleSegment(drawState.lastPoint, coords);
+    drawState.lastPoint = coords;
+    scheduleRender();
+    return;
+  }
+
+  if (activeAction === 'pinch' && selectedLayerId && pinchState) {
+    const layer = layers.find(l => l.id === selectedLayerId);
+    const metrics = getPinchMetrics();
+    if (layer && metrics) {
+      const scaleFactor = metrics.dist / pinchState.initialDist;
+      layer.scale = Math.max(0.2, Math.min(4, Number((pinchState.initialScale * scaleFactor).toFixed(2))));
+      const deltaDeg = ((metrics.angle - pinchState.initialAngle) * 180) / Math.PI;
+      layer.rotation = Math.round((pinchState.initialRotation + deltaDeg + 360) % 360);
+      scheduleRender();
+    }
+    return;
+  }
+
   if (!activeAction || !selectedLayerId || !layerInitialState) return;
 
   const layer = layers.find(l => l.id === selectedLayerId);
   if (!layer) return;
-
-  const coords = getCanvasCoordinates(e);
 
   if (activeAction === 'drag') {
     const dx = coords.x - dragStart.x;
@@ -622,9 +882,13 @@ function handlePointerMove(e) {
 }
 
 function handlePointerUp(e) {
+  activePointers.delete(e.pointerId);
+  if (activeAction === 'pinch' && activePointers.size >= 2) return;
   if (activeAction) {
     activeAction = null;
     layerInitialState = null;
+    pinchState = null;
+    drawState.lastPoint = null;
     try {
       targetCanvas.releasePointerCapture(e.pointerId);
     } catch (_) {}

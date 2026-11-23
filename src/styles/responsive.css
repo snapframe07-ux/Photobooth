@@ -111,20 +111,25 @@
   margin-bottom: 12px;
   padding: 10px 12px;
   background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
   border-radius: var(--r-sm);
   font-size: 0.9rem;
 }
 .shot-retake-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 .cutout-advanced { margin: 10px 0; font-size: 0.9rem; }
 .cutout-advanced summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+#viewCamera.cam-clean-mode .cam-left-panel,
+#viewCamera.cam-clean-mode .cam-right-panel,
 #viewCamera.cam-clean-mode .aspect-ratio-group,
 #viewCamera.cam-clean-mode .filter-group,
 #viewCamera.cam-clean-mode .timer-group,
 #viewCamera.cam-clean-mode .brightness-group,
-#viewCamera.cam-clean-mode .zoom-ruler-container,
+#viewCamera.cam-clean-mode .zoom-ruler-bar,
 #viewCamera.cam-clean-mode .cam-toolbar .btn-tool-icon {
   display: none;
+}
+#viewCamera.cam-clean-mode .cam-workspace {
+  grid-template-columns: 1fr;
 }
 #viewCamera.cam-clean-mode .cam-toolbar {
   justify-content: center;
@@ -187,54 +192,66 @@
   #frameCutoutCanvas { touch-action: manipulation; }
 }
 
-/* Four compact controls directly below the camera, including on phones. */
-.cam-workspace {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  padding: 12px 18px;
-  min-height: 0;
-  align-items: start;
+/* Desktop keeps the color-swatch filter carousel; mobile switches to compact controls below the preview. */
+@media (min-width: 681px) {
+  #cameraFilterSelect {
+    display: none;
+  }
 }
-.cam-workspace .cam-center-area { grid-column: 1 / -1; grid-row: 1; }
-.cam-workspace .cam-left-panel, .cam-workspace .cam-right-panel { display: contents; }
-.cam-workspace .aspect-ratio-group { grid-column: 1; }
-.cam-workspace .filter-group { grid-column: 2; }
-.cam-workspace .timer-group { grid-column: 3; }
-.cam-workspace .brightness-group { grid-column: 4; }
-.cam-workspace .aspect-ratio-group, .cam-workspace .filter-group,
-.cam-workspace .timer-group, .cam-workspace .brightness-group {
-  grid-row: 2;
-  min-width: 0;
-  width: 100%;
-  height: auto;
-  gap: 4px;
+
+@media (max-width: 680px) {
+  /* Four compact controls directly below the camera on narrow screens. */
+  .cam-workspace {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    padding: 12px 18px;
+    min-height: 0;
+    align-items: start;
+  }
+  .cam-workspace .cam-center-area { grid-column: 1 / -1; grid-row: 1; }
+  .cam-workspace .cam-left-panel, .cam-workspace .cam-right-panel { display: contents; }
+  .cam-workspace .aspect-ratio-group { grid-column: 1; }
+  .cam-workspace .filter-group { grid-column: 2; }
+  .cam-workspace .timer-group { grid-column: 3; }
+  .cam-workspace .brightness-group { grid-column: 4; }
+  .cam-workspace .aspect-ratio-group, .cam-workspace .filter-group,
+  .cam-workspace .timer-group, .cam-workspace .brightness-group {
+    grid-row: 2;
+    min-width: 0;
+    width: 100%;
+    height: auto;
+    gap: 4px;
+  }
+  .cam-workspace .btn-arrow-toggle, .cam-workspace .filter-carousel-viewport,
+  .cam-workspace .brightness-icon { display: none; }
+  #cameraFilterSelect {
+    width: 100%;
+    min-width: 0;
+    min-height: 44px;
+    padding: 4px;
+    font: inherit;
+    font-size: 16px;
+    border: 2px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    color: var(--text-main);
+  }
+  .cam-workspace .btn-aspect-opt, .cam-workspace .btn-timer-opt { width: 100%; min-height: 44px; }
+  .cam-workspace .brightness-slider-wrap { height: 44px; width: 100%; }
+  .cam-workspace .brightness-input {
+    writing-mode: horizontal-tb;
+    -webkit-appearance: auto;
+    appearance: auto;
+    width: 100%;
+    min-width: 0;
+    height: 44px;
+    margin: 0;
+  }
 }
-.cam-workspace .btn-arrow-toggle, .cam-workspace .filter-carousel-viewport,
-.cam-workspace .brightness-icon { display: none; }
-#cameraFilterSelect {
-  width: 100%;
-  min-width: 0;
-  min-height: 44px;
-  padding: 4px;
-  font: inherit;
-  font-size: 16px;
-  border: 2px solid var(--border-strong);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-  color: var(--text-main);
-}
-.cam-workspace .btn-aspect-opt, .cam-workspace .btn-timer-opt { width: 100%; min-height: 44px; }
-.cam-workspace .brightness-slider-wrap { height: 44px; width: 100%; }
-.cam-workspace .brightness-input {
-  writing-mode: horizontal-tb;
-  -webkit-appearance: auto;
-  appearance: auto;
-  width: 100%;
-  min-width: 0;
-  height: 44px;
-  margin: 0;
-}
+
 @media (max-width: 400px) {
+  .nav-btn { padding: 0.3rem 0.15rem; }
+  .nav-btn .nav-label { font-size: 0.66rem; }
   .cam-workspace { padding: 10px 12px; gap: 6px; }
   .cam-workspace .panel-label { font-size: 11px; }
 }

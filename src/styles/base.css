@@ -156,7 +156,7 @@ body {
 /* Segmented tab control */
 .nav-tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 0.3rem;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -259,8 +259,12 @@ body {
   background: var(--scrim);
   backdrop-filter: blur(4px);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  text-align: center;
   z-index: 10;
   opacity: 0;
   pointer-events: none;
@@ -272,8 +276,19 @@ body {
   pointer-events: auto;
 }
 
+.countdown-shot-badge {
+  font-size: clamp(0.9rem, 3.2vw, 1.2rem);
+  font-weight: 800;
+  padding: 0.3rem 0.9rem;
+  border-radius: var(--r-pill);
+  background: var(--scrim-strong);
+  color: var(--text-on-dark);
+  letter-spacing: 0.02em;
+}
+
 .countdown-number {
-  font-size: 6rem;
+  font-size: clamp(3.5rem, 16vw, 6rem);
+  line-height: 1;
   font-weight: 900;
   color: var(--text-on-dark);
   text-shadow: 0 10px 25px var(--scrim-strong);

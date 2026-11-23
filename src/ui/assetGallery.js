@@ -1,18 +1,19 @@
 // Shared catalog operations for uploaded frames and stickers.
-export function bindCatalogDeleteButtons(container, catalog, { label, render, deleteRemote, showError }) {
+export function bindCatalogDeleteButtons(container, catalog, { label, render, deleteRemote, showError, confirmAction = msg => confirm(msg) }) {
   container.querySelectorAll('.btn-item-del').forEach(button => {
     button.addEventListener('click', async event => {
       event.stopPropagation();
       const id = event.currentTarget.dataset.del;
       const index = catalog.findIndex(item => item.id === id);
-      if (!confirm(`ลบ${label} "${catalog[index]?.name || id}" ออกจากคลัง?`)) return;
+      const confirmed = await confirmAction(`ลบ${label} "${catalog[index]?.name || id}" ออกจากคลัง?`);
+      if (!confirmed) return;
       if (index >= 0) catalog.splice(index, 1);
       render();
       try {
         await deleteRemote(id);
       } catch (error) {
-        console.warn(`ลบ${label}บน Supabase ไม่สำเร็จ:`, error.message);
-        showError(`ลบ${label}ออกจาก Supabase ไม่สำเร็จ: ${error.message}`);
+        console.warn(`ลบ${label}บนคลาวด์ไม่สำเร็จ:`, error.message);
+        showError(`ลบ${label}ออกจากคลาวด์ไม่สำเร็จ: ${error.message}`);
       }
     });
   });

@@ -222,6 +222,32 @@ export class SupabaseService {
     return data || [];
   }
 
+  async uploadTemplateImage(blob, folder = 'template-frames') {
+    const user = await this.getCurrentUser();
+    if (!user || !blob) return null;
+
+    const filePath = `${folder}/${user.id}/${Date.now()}_${Math.random().toString(36).substring(2, 6)}.png`;
+    const { error: uploadError } = await supabase
+      .storage
+      .from('frames')
+      .upload(filePath, blob, {
+        contentType: 'image/png',
+        cacheControl: '3600',
+        upsert: false
+      });
+
+    if (uploadError) {
+      throw handleSupabaseError(uploadError, 'อัปโหลดรูปภาพเทมเพลตขัดข้อง');
+    }
+
+    const { data: { publicUrl } } = supabase
+      .storage
+      .from('frames')
+      .getPublicUrl(filePath);
+
+    return publicUrl || null;
+  }
+
   async deleteTemplate(templateId) {
     const user = await this.getCurrentUser();
     if (!user) throw new Error('กรุณาเข้าสู่ระบบก่อน');

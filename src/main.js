@@ -1,14 +1,17 @@
 import { sharePhoto, copyPhoto, printPhoto, isMobilePhotoDevice } from './modules/photoShare.js';
 import { snapshotGifFrame, readGifFrames, encodePhotoGif } from './modules/photoGif.js';
-import { FRAMES_CATALOG, STICKERS_CATALOG, FILTERS_CATALOG } from './data/catalogs.js';
+import { FRAMES_CATALOG, STICKERS_CATALOG, STICKER_CATEGORIES, FILTERS_CATALOG } from './data/catalogs.js';
 import { renderAppLayout } from './ui/appLayout.js';
-import { loadImageFromBlob } from './modules/imageLoader.js';
 import { bindCatalogDeleteButtons, loadSavedCatalog } from './ui/assetGallery.js';
 import './style.css';
 import { composePhotoStrip, getStripLayout } from './modules/photoStrip.js';
-import { serializeCaptureFrame, restoreCaptureFrame } from './modules/templateFrame.js';
+import { buildBuiltinFrameDataUrl, isBuiltinFrame } from './modules/builtinFrames.js';
+import { serializeCaptureFrame, restoreCaptureFrame, renderFrameToBlob } from './modules/templateFrame.js';
 import { getFrameLayout, clearFrameRectangle, clearSelectedFrameSlots } from './modules/frameSlots.js';
 import { applyPixelFilter } from './modules/imageFilters.js';
+import { playCountdownBeep, playShutterSound } from './modules/soundEffects.js';
+import { composeStoryCanvas } from './modules/storyExport.js';
+import { exportLiveStripVideo } from './modules/liveStripVideo.js';
 
 // Modules
 import {
@@ -36,7 +39,15 @@ import {
   downloadImage,
   downloadDataUrl,
   exportImage,
-  getLayers
+  getLayers,
+  undo,
+  redo,
+  resetHistory,
+  setOnHistoryChange,
+  setDrawMode,
+  isDrawMode,
+  clearDoodle,
+  getDoodleCanvas
 } from './modules/canvasEngine.js';
 
 import { removeBackground, cutoutFrameSlots, loadFrameCanvas, floodFillRegion } from './modules/segmenter.js';
@@ -46,8 +57,6 @@ import { appUI } from './ui/appUI.js';
 let currentUser = null;
 let lastUploadedStickerBlob = null;
 let lastUploadedStickerUrl = null;
-let lastUploadedFrameBlob = null;
-let lastUploadedFrameUrl = null;
 
 // Camera Studio State
 let activeFilterIndex = 0;
@@ -57,13 +66,77 @@ let activeZoom = 1.0;
 // true = กล้องไม่รองรับซูมฮาร์ดแวร์ จึงต้องซูมด้วย CSS transform แทน
 // ถ้าฮาร์ดแวร์รับงานแล้วยังใส่ CSS อีกจะกลายเป็นซูมซ้อนสองชั้น
 let usingCssZoom = true;
-let activeEditorFilter = 'none';   // ฟิลเตอร์ที่ใช้กับ base layer ในหน้าตกแต่ง
+let activeEditorFilter = 'none';   // ฟิลเตอร์ที่ใช้กับภาพถ่ายในหน้าตกแต่ง (เปลี่ยนย้อนกลับได้)
+let activeStripBgColor = '#FFF5F7'; // สีพื้นหลังของ Photo Strip
+let activeStripBgPattern = 'solid'; // ลายพื้นหลังของ Photo Strip
+let activeStripFooterText = 'SnapFrame';
+let activeStripShowDate = false;
+let activeStripFooterFont = 'sans-serif';
+
+const STRIP_BG_PRESETS = [
+  { color: '#FFF5F7', name: 'ชมพูอ่อน' },
+  { color: '#FFFFFF', name: 'ขาว' },
+  { color: '#FAF7F2', name: 'ครีม' },
+  { color: '#18181B', name: 'ดำ' },
+  { color: '#FCE7F3', name: 'พาสเทลชมพู' },
+  { color: '#E0F2FE', name: 'ฟ้าอ่อน' },
+  { color: '#EDE9FE', name: 'ม่วงอ่อน' },
+  { color: '#FEF3C7', name: 'เหลืองอ่อน' }
+];
+
+const STRIP_BG_PATTERNS = [
+  { id: 'solid', name: 'สีล้วน' },
+  { id: 'gradient-pastel', name: 'ไล่เฉดพาสเทล' },
+  { id: 'gradient-sunset', name: 'ไล่เฉดซันเซต' },
+  { id: 'gradient-mint', name: 'ไล่เฉดมิ้นต์' },
+  { id: 'gradient-night', name: 'ไล่เฉดกลางคืน' },
+  { id: 'checker', name: 'ตารางหมากรุก' },
+  { id: 'dots', name: 'ลายจุด' }
+];
+
+// Camera Booth Feel State
+let soundEnabled = true;
+const RING_LIGHT_MODES = [
+  { id: 'off', label: 'ปิด', cls: '' },
+  { id: 'white', label: 'ขาว', cls: 'ring-light-white' },
+  { id: 'warm', label: 'อุ่น', cls: 'ring-light-warm' },
+  { id: 'pink', label: 'ชมพู', cls: 'ring-light-pink' }
+];
+let ringLightIndex = 0;
+let manualShutterMode = false;
+let burstGapSeconds = 1;
+let manualShutterResolver = null;
+let manualMirrorOverride = null; // null = auto ตามกล้องหน้า/หลัง
+
+// Sticker Search / Category / Pin State
+let activeStickerCategory = 'all';
+let stickerSearchQuery = '';
+const PINNED_STORAGE_KEY = 'snapframe-pinned-stickers';
+let pinnedStickerIds = new Set((() => {
+  try { return JSON.parse(localStorage.getItem(PINNED_STORAGE_KEY) || '[]'); } catch { return []; }
+})());
+
+// Doodle Brush State
+const DRAW_COLOR_PRESETS = ['#ec4899', '#ffffff', '#18181b', '#facc15', '#38bdf8', '#a855f7', '#22c55e', '#ef4444'];
+let activeDrawColor = '#ec4899';
+let activeDrawSize = 10;
+let activeDrawEraser = false;
+let replacingShotIndex = null;
 let activeBurstCount = 4;
 let gifPhotos = [];
 let capturedFrames = [];
 let capturedGifFrames = [];
+let capturedLiveClips = [];
 let capturedContext = null;
 let retakingShotIndex = null;
+let shootPickTotal = 0; // 0 = ปกติ, 6 = ถ่าย 6 เลือก 4, 8 = ถ่าย 8 เลือก 4
+let liveVideoMode = false;
+
+function setLiveClips(clips) {
+  capturedLiveClips = clips || [];
+  const btn = document.querySelector('#btnExportLiveVideo');
+  if (btn) btn.disabled = capturedLiveClips.length === 0;
+}
 
 function setGifPhotos(photos) {
   gifPhotos = photos;
@@ -99,15 +172,18 @@ const videoElement = document.querySelector('#webcam');
 const canvasElement = document.querySelector('#photoCanvas');
 const canvasContainer = document.querySelector('.canvas-container');
 const editorFilterRow = document.querySelector('#editorFilterRow');
+const editorFrameRow = document.querySelector('#editorFrameRow');
+const editorBgBox = document.querySelector('#editorBgBox');
+const editorBgColorRow = document.querySelector('#editorBgColorRow');
 
 // ชุด id ของกรอบ/สติกเกอร์ที่ติดมากับแอป (เก็บก่อนมีการเพิ่มของผู้ใช้)
 // ใช้ตัดสินว่าชิ้นไหนลบได้
 const BUILTIN_FRAME_IDS = new Set(FRAMES_CATALOG.map(f => f.id));
 const BUILTIN_STICKER_IDS = new Set(STICKERS_CATALOG.map(s => s.id));
 const countdownOverlay = document.querySelector('#countdownOverlay');
+const countdownShotBadge = document.querySelector('#countdownShotBadge');
 const countdownNumber = document.querySelector('#countdownNumber');
 
-const btnStopCamera = document.querySelector('#btnStopCamera');
 const btnSwitch = document.querySelector('#btnSwitch');
 const btnCapture = document.querySelector('#btnCapture');
 const btnRetake = document.querySelector('#btnRetake');
@@ -118,7 +194,6 @@ const btnSaveTemplate = document.querySelector('#btnSaveTemplate');
 // Camera Studio DOM Elements
 const previewBox = document.querySelector('#previewBox');
 const btnAspectActive = document.querySelector('#btnAspectActive');
-const aspectCollapsible = document.querySelector('#aspectCollapsible');
 const btnAspectArrow = document.querySelector('#btnAspectArrow');
 
 const filterCarouselTrack = document.querySelector('#filterCarouselTrack');
@@ -137,18 +212,18 @@ const btnToolGrid = document.querySelector('#btnToolGrid');
 const btnToolBurst = document.querySelector('#btnToolBurst');
 const burstBadge = document.querySelector('#burstBadge');
 
-const tabFrames = document.querySelector('#tabFrames');
 const tabStickers = document.querySelector('#tabStickers');
+const tabText = document.querySelector('#tabText');
+const tabDraw = document.querySelector('#tabDraw');
 const tabUpload = document.querySelector('#tabUpload');
 const stickerTabCount = document.querySelector('#stickerTabCount');
-const frameTabCount = document.querySelector('#frameTabCount');
 
-const framePanel = document.querySelector('#framePanel');
-const btnSaveCustomFrame = document.querySelector('#btnSaveCustomFrame');
-const frameActions = document.querySelector('#frameActions');
-const btnManualCutout = document.querySelector('#btnManualCutout');
-const galleryFrames = document.querySelector('#galleryFrames');
+const stickerPanel = document.querySelector('#stickerPanel');
+const stickerSearchInput = document.querySelector('#stickerSearchInput');
+const stickerCategoryBar = document.querySelector('#stickerCategoryBar');
 const galleryStickers = document.querySelector('#galleryStickers');
+const galleryText = document.querySelector('#galleryText');
+const galleryDraw = document.querySelector('#galleryDraw');
 const galleryUpload = document.querySelector('#galleryUpload');
 
 const stickerUploader = document.querySelector('#stickerUploader');
@@ -212,11 +287,133 @@ let authMode = 'login';
 let templateCategory = 'my';
 
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function isSafeImageSrc(src) {
+  return typeof src === 'string' && /^(https?:\/\/|data:image\/(png|jpeg|webp|svg\+xml);|blob:|\/|\.)/i.test(src);
+}
+
+function showToast(message, type = 'info') {
+  const container = document.querySelector('#toastContainer');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = `app-toast ${type}`;
+  toast.textContent = message;
+  container.append(toast);
+  setTimeout(() => toast.remove(), 3500);
+}
+
+function openFeedbackDialog(message, { mode = 'confirm', defaultValue = '', confirmText = 'ตกลง', cancelText = 'ยกเลิก', danger = false } = {}) {
+  const dialog = document.querySelector('#appFeedbackDialog');
+  const msgEl = document.querySelector('#appFeedbackMessage');
+  const inputEl = document.querySelector('#appFeedbackInput');
+  const btnConfirm = document.querySelector('#appFeedbackConfirm');
+  const btnCancel = document.querySelector('#appFeedbackCancel');
+  if (!dialog) {
+    return Promise.resolve(mode === 'prompt' ? defaultValue : true);
+  }
+  msgEl.textContent = message;
+  btnConfirm.textContent = confirmText;
+  btnCancel.textContent = cancelText;
+  btnConfirm.className = `btn ${danger ? 'btn-danger' : 'btn-primary'}`;
+  if (mode === 'prompt') {
+    inputEl.value = defaultValue;
+    inputEl.classList.remove('hidden');
+  } else {
+    inputEl.classList.add('hidden');
+  }
+  return new Promise(resolve => {
+    const cleanup = result => {
+      btnConfirm.removeEventListener('click', onConfirm);
+      btnCancel.removeEventListener('click', onCancel);
+      dialog.removeEventListener('cancel', onCancel);
+      inputEl.removeEventListener('keydown', onKeydown);
+      if (dialog.open) dialog.close();
+      resolve(result);
+    };
+    const onConfirm = () => cleanup(mode === 'prompt' ? inputEl.value : true);
+    const onCancel = () => cleanup(mode === 'prompt' ? null : false);
+    const onKeydown = e => { if (e.key === 'Enter') { e.preventDefault(); onConfirm(); } };
+    btnConfirm.addEventListener('click', onConfirm);
+    btnCancel.addEventListener('click', onCancel);
+    dialog.addEventListener('cancel', onCancel);
+    inputEl.addEventListener('keydown', onKeydown);
+    dialog.showModal();
+    if (mode === 'prompt') inputEl.select();
+  });
+}
+
+function showConfirmDialog(message, options = {}) {
+  return openFeedbackDialog(message, { ...options, mode: 'confirm' });
+}
+
+function showPromptDialog(message, defaultValue = '', options = {}) {
+  return openFeedbackDialog(message, { ...options, mode: 'prompt', defaultValue });
+}
+
 // Init Canvas Engine
 initCanvasEngine(canvasElement);
-renderFrameGallery();
+renderStickerCategories();
 renderStickerGallery();
 renderEditorFilterRow();
+renderEditorFrameRow();
+renderEditorBgColorRow();
+renderDrawColorRow();
+
+const btnUndo = document.querySelector('#btnUndo');
+const btnRedo = document.querySelector('#btnRedo');
+setOnHistoryChange(({ canUndo, canRedo }) => {
+  if (btnUndo) btnUndo.disabled = !canUndo;
+  if (btnRedo) btnRedo.disabled = !canRedo;
+});
+btnUndo?.addEventListener('click', () => { undo(); refreshLayerListUI(); });
+btnRedo?.addEventListener('click', () => { redo(); refreshLayerListUI(); });
+
+// Keyboard shortcuts: Ctrl+Z (Undo), Ctrl+Y / Ctrl+Shift+Z (Redo), Delete/Backspace (Remove selected layer)
+window.addEventListener('keydown', e => {
+  if (viewEditor.classList.contains('hidden')) return;
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey) redo();
+    else undo();
+    refreshLayerListUI();
+  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+    e.preventDefault();
+    redo();
+    refreshLayerListUI();
+  } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    const selId = getSelectedLayerId();
+    if (selId && selId !== 'base-layer') {
+      e.preventDefault();
+      removeLayer(selId);
+      refreshLayerListUI();
+    }
+  }
+});
+
+// โหลดคลังภาพที่บันทึกไว้ใน IndexedDB เพื่อให้รูปอยู่ครบแม้รีเฟรชหน้า
+appUI.initSessionPhotos().then(photos => {
+  galleryCount.textContent = photos.length;
+});
+
+// แจ้งเตือนก่อนปิดหน้าหากกำลังตกแต่งภาพอยู่ หรืออุปกรณ์ไม่รองรับการจัดเก็บถาวร
+window.addEventListener('beforeunload', event => {
+  const hasUnsavedEditorWork = capturedFrames.length > 0 && !viewEditor.classList.contains('hidden');
+  const hasVolatilePhotos = !appUI.hasPersistentStorage && appUI.getSessionPhotos().length > 0;
+  if (hasUnsavedEditorWork || hasVolatilePhotos) {
+    event.preventDefault();
+    event.returnValue = '';
+  }
+});
 
 setOnSelectionChange(() => {
   refreshLayerListUI();
@@ -257,35 +454,92 @@ function updateUserAuthUI(user) {
   }
 }
 
+function savePinnedStickers() {
+  try { localStorage.setItem(PINNED_STORAGE_KEY, JSON.stringify([...pinnedStickerIds])); } catch (_) {}
+}
+
+function renderStickerCategories() {
+  if (!stickerCategoryBar) return;
+  stickerCategoryBar.innerHTML = STICKER_CATEGORIES.map(cat => `
+    <button type="button" class="bg-pattern-chip ${activeStickerCategory === cat.id ? 'selected' : ''}" data-cat="${cat.id}">${escapeHtml(cat.name)}</button>
+  `).join('');
+  stickerCategoryBar.querySelectorAll('.bg-pattern-chip').forEach(btn => {
+    btn.addEventListener('click', e => {
+      activeStickerCategory = e.currentTarget.dataset.cat;
+      renderStickerCategories();
+      renderStickerGallery();
+    });
+  });
+}
+
+stickerSearchInput?.addEventListener('input', e => {
+  stickerSearchQuery = e.target.value.trim().toLowerCase();
+  renderStickerGallery();
+});
+
 /**
- * Render Sticker Gallery Carousel
+ * Render Sticker Gallery Carousel (with search, category filter & pinning)
  */
 function renderStickerGallery() {
-  galleryStickers.innerHTML = STICKERS_CATALOG.map(s => `
-    <div class="gallery-item sticker-item" data-src="${s.src}" data-id="${s.id}">
-      <img src="${s.src}" alt="${s.name}" />
-      <span class="item-name">${s.name}</span>
-      ${BUILTIN_STICKER_IDS.has(s.id) ? '' : `<button class="btn-item-del" data-del="${s.id}" title="ลบสติกเกอร์นี้">✖️</button>`}
-    </div>
-  `).join('');
+  const filtered = STICKERS_CATALOG
+    .filter(s => {
+      if (activeStickerCategory === 'pinned' && !pinnedStickerIds.has(s.id)) return false;
+      if (activeStickerCategory !== 'all' && activeStickerCategory !== 'pinned' && (s.category || 'doodle') !== activeStickerCategory) return false;
+      if (stickerSearchQuery && !s.name.toLowerCase().includes(stickerSearchQuery)) return false;
+      return true;
+    })
+    .sort((a, b) => Number(pinnedStickerIds.has(b.id)) - Number(pinnedStickerIds.has(a.id)));
+
+  if (filtered.length === 0) {
+    galleryStickers.innerHTML = '<p class="empty-layers" style="width:100%">ไม่พบสติกเกอร์ในหมวดหมู่นี้</p>';
+    stickerTabCount.textContent = STICKERS_CATALOG.length;
+    return;
+  }
+
+  galleryStickers.innerHTML = filtered.map(s => {
+    const isPinned = pinnedStickerIds.has(s.id);
+    return `
+      <div class="gallery-item sticker-item" data-src="${escapeHtml(s.src)}" data-id="${escapeHtml(s.id)}" data-name="${escapeHtml(s.name)}">
+        <button type="button" class="btn-item-pin ${isPinned ? 'pinned' : ''}" data-pin="${escapeHtml(s.id)}" title="${isPinned ? 'เลิกปักหมุด' : 'ปักหมุดสติกเกอร์นี้'}">📌</button>
+        <img src="${escapeHtml(s.src)}" alt="${escapeHtml(s.name)}" />
+        <span class="item-name">${escapeHtml(s.name)}</span>
+        ${BUILTIN_STICKER_IDS.has(s.id) ? '' : `<button class="btn-item-del" data-del="${escapeHtml(s.id)}" title="ลบสติกเกอร์นี้">✖️</button>`}
+      </div>
+    `;
+  }).join('');
+
+  galleryStickers.querySelectorAll('.btn-item-pin').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const id = e.currentTarget.dataset.pin;
+      if (pinnedStickerIds.has(id)) pinnedStickerIds.delete(id);
+      else pinnedStickerIds.add(id);
+      savePinnedStickers();
+      renderStickerGallery();
+    });
+  });
 
   bindCatalogDeleteButtons(galleryStickers, STICKERS_CATALOG, {
     label: 'สติกเกอร์',
     render: renderStickerGallery,
     deleteRemote: id => currentUser && isSupabaseConfigured ? supabaseService.deleteSticker(id) : null,
-    showError
+    showError,
+    confirmAction: msg => showConfirmDialog(msg, { confirmText: 'ลบ', danger: true })
   });
 
   galleryStickers.querySelectorAll('.sticker-item').forEach(item => {
     item.addEventListener('click', async (e) => {
+      if (isDrawMode()) toggleDrawMode(false);
       const src = e.currentTarget.dataset.src;
       const id = e.currentTarget.dataset.id;
+      const name = e.currentTarget.dataset.name || 'สติกเกอร์';
       await addLayer({
         type: 'sticker',
         image: src,
+        label: name,
         id: `sticker-${id}-${Date.now().toString().substring(8)}`,
-        x: 350 + Math.random() * 300,
-        y: 200 + Math.random() * 200,
+        x: (canvasElement.width || 960) * (0.3 + Math.random() * 0.4),
+        y: (canvasElement.height || 720) * (0.25 + Math.random() * 0.4),
         scale: 1,
         rotation: 0
       });
@@ -297,68 +551,36 @@ function renderStickerGallery() {
 }
 
 /**
- * Render Frame Gallery Carousel
- * ต้อง render ใหม่ทุกครั้งที่ FRAMES_CATALOG เปลี่ยน (เช่น อัปโหลดกรอบใหม่)
+ * ประกอบ Photo Strip ใหม่จากภาพดิบแต่ละช็อต + ฟิลเตอร์เฉพาะรูป + พื้นหลัง + กรอบ
+ * ทำให้เปลี่ยนฟิลเตอร์ย้อนกลับได้ และฟิลเตอร์ไม่ย้อมสีพื้นหลังหรือกรอบรูป
  */
-function renderFrameGallery() {
-  if (!galleryFrames) return;
-
-  galleryFrames.innerHTML = `
-    <div class="gallery-item none-item" id="btnRemoveFrame">
-      <span class="none-icon">🚫</span>
-      <span class="item-name">ไม่ใช้กรอบ</span>
-    </div>
-    <label class="gallery-item upload-item" title="แนะนำไฟล์ PNG ที่เจาะกลางโปร่งใส ขนาด 1280×720">
-      <span class="none-icon">➕</span>
-      <span class="item-name">อัปโหลดกรอบ</span>
-      <input type="file" id="frameUploader" accept="image/*" class="hidden-input">
-    </label>
-    ${FRAMES_CATALOG.map(f => `
-      <div class="gallery-item frame-item" data-src="${f.src}" data-id="${f.id}">
-        <img src="${f.src}" alt="${f.name}" />
-        <span class="item-name">${f.name}</span>
-        ${BUILTIN_FRAME_IDS.has(f.id) ? '' : `<button class="btn-item-del" data-del="${f.id}" title="ลบกรอบนี้">✖️</button>`}
-      </div>
-    `).join('')}
-  `;
-
-  // ปุ่มลบขึ้นเฉพาะกรอบที่ผู้ใช้อัปโหลดเอง ของที่ติดมากับแอปลบไม่ได้
-  bindCatalogDeleteButtons(galleryFrames, FRAMES_CATALOG, {
-    label: 'กรอบ',
-    render: renderFrameGallery,
-    deleteRemote: id => currentUser && isSupabaseConfigured ? supabaseService.deleteFrame(id) : null,
-    showError
-  });
-
-  galleryFrames.querySelector('#btnRemoveFrame').addEventListener('click', () => {
-    const frameLayer = getLayers().find(l => l.type === 'frame');
-    if (frameLayer) {
-      removeLayer(frameLayer.id);
-    }
-    refreshLayerListUI();
-  });
-
-  galleryFrames.querySelector('#frameUploader').addEventListener('change', handleFrameUpload);
-
-  galleryFrames.querySelectorAll('.frame-item').forEach(item => {
-    item.addEventListener('click', async (e) => {
-      const src = e.currentTarget.dataset.src;
-      const id = e.currentTarget.dataset.id;
-      await addLayer({
-        type: 'frame',
-        image: src,
-        id: `frame-${id}`
-      });
-      refreshLayerListUI();
-    });
-  });
-
-  frameTabCount.textContent = FRAMES_CATALOG.length;
+function rebuildEditorStrip() {
+  if (capturedFrames.length > 0 && capturedContext) {
+    const strip = composePhotoStrip(
+      capturedFrames,
+      capturedContext.decoration,
+      capturedContext.aspectRatio,
+      capturedContext.frameLayout,
+      capturedContext.stripOrientation,
+      {
+        bgColor: activeStripBgColor,
+        bgPattern: activeStripBgPattern,
+        filter: activeEditorFilter,
+        footerText: activeStripFooterText,
+        showDate: activeStripShowDate,
+        footerFont: activeStripFooterFont
+      }
+    );
+    setTargetCanvas(canvasElement);
+    setBaseLayerImage(strip);
+    updateLayer('base-layer', { filter: 'none' });
+  } else {
+    updateLayer('base-layer', { filter: activeEditorFilter });
+  }
 }
 
 /**
- * แถวฟิลเตอร์ในหน้าตกแต่ง — เปลี่ยนฟิลเตอร์หลังถ่ายได้
- * ฟิลเตอร์ถูกเก็บเป็นคุณสมบัติของ base layer แล้วใส่ตอนวาด ไม่ได้อบติดพิกเซล
+ * แถวฟิลเตอร์ในหน้าตกแต่ง — เปลี่ยนฟิลเตอร์หลังถ่ายได้โดยไม่ย้อมสีกรอบหรือพื้นหลังแถบ
  */
 function renderEditorFilterRow() {
   if (!editorFilterRow) return;
@@ -373,11 +595,143 @@ function renderEditorFilterRow() {
   editorFilterRow.querySelectorAll('.filter-item').forEach(item => {
     item.addEventListener('click', (e) => {
       activeEditorFilter = e.currentTarget.dataset.css;
-      updateLayer('base-layer', { filter: activeEditorFilter });
+      rebuildEditorStrip();
       renderEditorFilterRow();
     });
   });
 }
+
+/**
+ * แถวเปลี่ยนกรอบรูปในหน้าตกแต่ง (หลังถ่าย)
+ */
+function renderEditorFrameRow() {
+  if (!editorFrameRow) return;
+  const shotCount = capturedFrames.length;
+  const availableFrames = FRAMES_CATALOG.filter(f =>
+    BUILTIN_FRAME_IDS.has(f.id) || (f.stripUpload && (!f.layout || !shotCount || f.layout.slots.length === shotCount))
+  );
+  const currentFrameId = capturedContext ? (capturedContext.frame?.id || null) : (selectedStripFrame?.id || null);
+
+  editorFrameRow.innerHTML = `
+    <div class="gallery-item none-item ${currentFrameId === null ? 'selected' : ''}" data-frame-id="">
+      <span class="none-icon">🚫</span>
+      <span class="item-name">ไม่ใช้กรอบ</span>
+    </div>
+    ${availableFrames.map(f => `
+      <div class="gallery-item frame-item ${f.id === currentFrameId ? 'selected' : ''}" data-frame-id="${escapeHtml(f.id)}">
+        <img src="${escapeHtml(f.src)}" alt="${escapeHtml(f.name)}" />
+        <span class="item-name">${escapeHtml(f.name)}</span>
+      </div>
+    `).join('')}
+  `;
+
+  editorFrameRow.querySelectorAll('.gallery-item').forEach(item => {
+    item.addEventListener('click', async (e) => {
+      const id = e.currentTarget.dataset.frameId;
+      const nextFrame = id ? availableFrames.find(f => f.id === id) || null : null;
+      selectedStripFrame = nextFrame;
+      try {
+        hideError();
+        if (capturedFrames.length > 0 && capturedContext) {
+          const nextLayout = nextFrame?.layout || null;
+          const outputLayout = nextLayout || getStripLayout(
+            capturedFrames.length, 960, capturedContext.aspectRatio, capturedContext.stripOrientation
+          );
+          const decoration = await loadStripDecoration(nextFrame, outputLayout.width, outputLayout.height);
+          capturedContext = { ...capturedContext, frame: nextFrame, decoration, frameLayout: nextLayout };
+          if (lastCaptureSettings) {
+            lastCaptureSettings = {
+              ...lastCaptureSettings,
+              frame: serializeCaptureFrame(nextFrame, decoration, outputLayout)
+            };
+          }
+          rebuildEditorStrip();
+        } else {
+          const existingFrame = getLayers().find(l => l.type === 'frame');
+          if (!nextFrame) {
+            if (existingFrame) removeLayer(existingFrame.id);
+          } else {
+            const src = buildBuiltinFrameDataUrl(nextFrame.id, canvasElement.width, canvasElement.height) || nextFrame.src;
+            await addLayer({ type: 'frame', image: src, label: nextFrame.name, id: `frame-${nextFrame.id}` });
+          }
+          refreshLayerListUI();
+        }
+        renderEditorFrameRow();
+        renderEditorBgColorRow();
+      } catch (err) {
+        showError(`เปลี่ยนกรอบไม่สำเร็จ: ${err.message}`);
+      }
+    });
+  });
+}
+
+/**
+ * แถวเลือกสีพื้นหลังของ Photo Strip ในหน้าตกแต่ง
+ */
+function renderEditorBgColorRow() {
+  if (!editorBgColorRow || !editorBgBox) return;
+  const canChangeBg = capturedFrames.length > 0 && capturedContext && !capturedContext.frameLayout;
+  editorBgBox.classList.toggle('hidden', !canChangeBg);
+  if (!canChangeBg) return;
+
+  editorBgColorRow.innerHTML = `
+    ${STRIP_BG_PRESETS.map(p => `
+      <button type="button"
+        class="bg-color-swatch ${activeStripBgColor.toLowerCase() === p.color.toLowerCase() ? 'selected' : ''}"
+        data-color="${p.color}"
+        style="background: ${p.color}"
+        title="${p.name}"
+        aria-label="สีพื้นหลัง ${p.name}"
+        aria-pressed="${activeStripBgColor.toLowerCase() === p.color.toLowerCase()}"></button>
+    `).join('')}
+    <label class="bg-color-picker" title="เลือกสีพื้นหลังเอง">
+      <span>กำหนดเอง</span>
+      <input type="color" id="editorBgColorInput" value="${activeStripBgColor}" aria-label="เลือกสีพื้นหลังแถบภาพเอง">
+    </label>
+  `;
+
+  editorBgColorRow.querySelectorAll('.bg-color-swatch').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      activeStripBgColor = e.currentTarget.dataset.color;
+      rebuildEditorStrip();
+      renderEditorBgColorRow();
+    });
+  });
+
+  const colorInput = editorBgColorRow.querySelector('#editorBgColorInput');
+  colorInput?.addEventListener('input', (e) => {
+    activeStripBgColor = e.target.value;
+    rebuildEditorStrip();
+    editorBgColorRow.querySelectorAll('.bg-color-swatch').forEach(b => b.classList.remove('selected'));
+  });
+
+  const patternRow = document.querySelector('#editorBgPatternRow');
+  if (patternRow) {
+    patternRow.innerHTML = STRIP_BG_PATTERNS.map(p => `
+      <button type="button" class="bg-pattern-chip ${activeStripBgPattern === p.id ? 'selected' : ''}" data-pattern="${p.id}">${p.name}</button>
+    `).join('');
+    patternRow.querySelectorAll('.bg-pattern-chip').forEach(btn => {
+      btn.addEventListener('click', e => {
+        activeStripBgPattern = e.currentTarget.dataset.pattern;
+        rebuildEditorStrip();
+        renderEditorBgColorRow();
+      });
+    });
+  }
+}
+
+document.querySelector('#stripFooterTextInput')?.addEventListener('input', e => {
+  activeStripFooterText = e.target.value;
+  rebuildEditorStrip();
+});
+document.querySelector('#stripFooterFontSelect')?.addEventListener('change', e => {
+  activeStripFooterFont = e.target.value;
+  rebuildEditorStrip();
+});
+document.querySelector('#chkStripShowDate')?.addEventListener('change', e => {
+  activeStripShowDate = e.target.checked;
+  rebuildEditorStrip();
+});
 
 function loadSavedFramesFromSupabase() {
   if (!isSupabaseConfigured) return;
@@ -385,7 +739,10 @@ function loadSavedFramesFromSupabase() {
     fetchRecords: () => supabaseService.getFrames(),
     idKey: 'frame_id',
     fallbackName: 'กรอบบันทึก',
-    render: renderFrameGallery
+    render: () => {
+      renderStripSetup();
+      renderEditorFrameRow();
+    }
   });
 }
 
@@ -452,18 +809,150 @@ tabEditor.addEventListener('click', () => switchTab('editor'));
 tabTemplateGallery.addEventListener('click', () => switchTab('templates'));
 tabGallery.addEventListener('click', () => switchTab('gallery'));
 
-tabStickers.addEventListener('click', () => {
-  tabStickers.classList.add('active');
-  tabUpload.classList.remove('active');
-  galleryStickers.classList.remove('hidden');
-  galleryUpload.classList.add('hidden');
+function switchAssetTab(tab) {
+  [tabStickers, tabText, tabDraw, tabUpload].forEach(b => b?.classList.remove('active'));
+  [stickerPanel, galleryText, galleryDraw, galleryUpload].forEach(p => p?.classList.add('hidden'));
+  if (tab !== 'draw' && isDrawMode()) toggleDrawMode(false);
+  if (tab === 'stickers') { tabStickers?.classList.add('active'); stickerPanel?.classList.remove('hidden'); }
+  else if (tab === 'text') { tabText?.classList.add('active'); galleryText?.classList.remove('hidden'); }
+  else if (tab === 'draw') { tabDraw?.classList.add('active'); galleryDraw?.classList.remove('hidden'); }
+  else if (tab === 'upload') { tabUpload?.classList.add('active'); galleryUpload?.classList.remove('hidden'); }
+}
+
+tabStickers?.addEventListener('click', () => switchAssetTab('stickers'));
+tabText?.addEventListener('click', () => switchAssetTab('text'));
+tabDraw?.addEventListener('click', () => switchAssetTab('draw'));
+tabUpload?.addEventListener('click', () => switchAssetTab('upload'));
+
+// Text Layer Builder
+function buildTextLayerDataUrl(text, { font, color, stroke, showBg, bgColor }) {
+  const c = document.createElement('canvas');
+  const g = c.getContext('2d');
+  const fontSize = 54;
+  g.font = `800 ${fontSize}px ${font}`;
+  const metrics = g.measureText(text);
+  const padX = showBg ? 36 : 22;
+  const padY = showBg ? 24 : 18;
+  c.width = Math.max(120, Math.ceil(metrics.width + padX * 2));
+  c.height = Math.ceil(fontSize * 1.35 + padY * 2);
+
+  if (showBg) {
+    const r = Math.min(28, c.height / 2);
+    g.fillStyle = bgColor;
+    g.beginPath();
+    g.moveTo(r, 0);
+    g.lineTo(c.width - r, 0);
+    g.quadraticCurveTo(c.width, 0, c.width, r);
+    g.lineTo(c.width, c.height - r);
+    g.quadraticCurveTo(c.width, c.height, c.width - r, c.height);
+    g.lineTo(r, c.height);
+    g.quadraticCurveTo(0, c.height, 0, c.height - r);
+    g.lineTo(0, r);
+    g.quadraticCurveTo(0, 0, r, 0);
+    g.closePath();
+    g.fill();
+  }
+
+  g.font = `800 ${fontSize}px ${font}`;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  if (stroke) {
+    g.lineJoin = 'round';
+    g.lineWidth = 8;
+    g.strokeStyle = 'rgba(24, 24, 27, 0.72)';
+    g.strokeText(text, c.width / 2, c.height / 2);
+  }
+  g.fillStyle = color;
+  g.fillText(text, c.width / 2, c.height / 2);
+  return c.toDataURL('image/png');
+}
+
+document.querySelector('#btnAddTextLayer')?.addEventListener('click', async () => {
+  const input = document.querySelector('#textLayerInput');
+  const text = input?.value.trim();
+  if (!text) {
+    showToast('กรุณาพิมพ์ข้อความก่อนเพิ่มลงภาพ');
+    input?.focus();
+    return;
+  }
+  const src = buildTextLayerDataUrl(text, {
+    font: document.querySelector('#textLayerFont')?.value || 'sans-serif',
+    color: document.querySelector('#textLayerColor')?.value || '#ffffff',
+    stroke: Boolean(document.querySelector('#chkTextStroke')?.checked),
+    showBg: Boolean(document.querySelector('#chkTextBg')?.checked),
+    bgColor: document.querySelector('#textLayerBgColor')?.value || '#ec4899'
+  });
+  await addLayer({
+    type: 'sticker',
+    image: src,
+    label: `ข้อความ: ${text}`,
+    id: `text-${Date.now()}`,
+    x: (canvasElement.width || 960) / 2,
+    y: (canvasElement.height || 720) / 2,
+    scale: 1,
+    rotation: 0
+  });
+  input.value = '';
+  refreshLayerListUI();
+  showToast('เพิ่มข้อความลงภาพแล้ว — ลาก ย่อ/ขยาย หรือหมุนได้เลย', 'success');
 });
 
-tabUpload.addEventListener('click', () => {
-  tabUpload.classList.add('active');
-  tabStickers.classList.remove('active');
-  galleryUpload.classList.remove('hidden');
-  galleryStickers.classList.add('hidden');
+// Doodle / Brush Pen Controls
+function toggleDrawMode(force) {
+  const next = typeof force === 'boolean' ? force : !isDrawMode();
+  setDrawMode(next, { color: activeDrawColor, size: activeDrawSize, eraser: activeDrawEraser });
+  const btn = document.querySelector('#btnToggleDrawMode');
+  if (btn) {
+    btn.setAttribute('aria-pressed', String(next));
+    btn.textContent = next ? '✅ เสร็จสิ้นการวาด' : '✏️ เริ่มวาดบนภาพ';
+    btn.classList.toggle('btn-primary', !next);
+    btn.classList.toggle('btn-secondary', next);
+  }
+}
+
+function renderDrawColorRow() {
+  const row = document.querySelector('#drawColorRow');
+  if (!row) return;
+  row.innerHTML = DRAW_COLOR_PRESETS.map(c => `
+    <button type="button" class="bg-color-swatch ${!activeDrawEraser && activeDrawColor.toLowerCase() === c.toLowerCase() ? 'selected' : ''}" data-draw-color="${c}" style="background:${c}" aria-label="สีแปรง ${c}"></button>
+  `).join('');
+  row.querySelectorAll('.bg-color-swatch').forEach(btn => {
+    btn.addEventListener('click', e => {
+      activeDrawColor = e.currentTarget.dataset.drawColor;
+      activeDrawEraser = false;
+      document.querySelector('#drawColorInput').value = activeDrawColor;
+      document.querySelector('#btnDrawEraser')?.classList.remove('active');
+      document.querySelector('#btnDrawEraser')?.setAttribute('aria-pressed', 'false');
+      if (isDrawMode()) setDrawMode(true, { color: activeDrawColor, eraser: false });
+      renderDrawColorRow();
+    });
+  });
+}
+
+document.querySelector('#btnToggleDrawMode')?.addEventListener('click', () => toggleDrawMode());
+document.querySelector('#drawColorInput')?.addEventListener('input', e => {
+  activeDrawColor = e.target.value;
+  activeDrawEraser = false;
+  document.querySelector('#btnDrawEraser')?.classList.remove('active');
+  if (isDrawMode()) setDrawMode(true, { color: activeDrawColor, eraser: false });
+  renderDrawColorRow();
+});
+document.querySelector('#drawSizeSlider')?.addEventListener('input', e => {
+  activeDrawSize = Number(e.target.value) || 10;
+  document.querySelector('#drawSizeValue').textContent = String(activeDrawSize);
+  if (isDrawMode()) setDrawMode(true, { size: activeDrawSize });
+});
+document.querySelector('#btnDrawEraser')?.addEventListener('click', e => {
+  activeDrawEraser = !activeDrawEraser;
+  e.currentTarget.classList.toggle('active', activeDrawEraser);
+  e.currentTarget.setAttribute('aria-pressed', String(activeDrawEraser));
+  if (!isDrawMode() && activeDrawEraser) toggleDrawMode(true);
+  else if (isDrawMode()) setDrawMode(true, { eraser: activeDrawEraser });
+  renderDrawColorRow();
+});
+document.querySelector('#btnClearDoodle')?.addEventListener('click', () => {
+  clearDoodle();
+  showToast('ล้างเส้นวาดทั้งหมดแล้ว');
 });
 
 function showError(msg) {
@@ -485,12 +974,82 @@ function updateStatus(active, text) {
 }
 
 function updateMirrorState() {
-  const mode = getFacingMode();
-  if (mode === 'user') {
-    videoElement.classList.add('mirror');
-  } else {
-    videoElement.classList.remove('mirror');
+  const shouldMirror = manualMirrorOverride !== null ? manualMirrorOverride : (getFacingMode() === 'user');
+  videoElement.classList.toggle('mirror', shouldMirror);
+  const btnMirror = document.querySelector('#btnToolMirror');
+  if (btnMirror) {
+    btnMirror.classList.toggle('active', shouldMirror);
+    btnMirror.setAttribute('aria-pressed', String(shouldMirror));
   }
+}
+
+document.querySelector('#btnToolMirror')?.addEventListener('click', () => {
+  const currentlyMirrored = videoElement.classList.contains('mirror');
+  manualMirrorOverride = !currentlyMirrored;
+  updateMirrorState();
+  applyLiveStreamFilters();
+});
+
+document.querySelector('#btnToolSound')?.addEventListener('click', e => {
+  soundEnabled = !soundEnabled;
+  e.currentTarget.setAttribute('aria-pressed', String(soundEnabled));
+  e.currentTarget.textContent = soundEnabled ? '🔊 เสียง' : '🔇 ปิดเสียง';
+});
+
+document.querySelector('#btnToolRingLight')?.addEventListener('click', e => {
+  const card = document.querySelector('.cam-studio-card');
+  RING_LIGHT_MODES.forEach(m => { if (m.cls) card?.classList.remove(m.cls); });
+  ringLightIndex = (ringLightIndex + 1) % RING_LIGHT_MODES.length;
+  const mode = RING_LIGHT_MODES[ringLightIndex];
+  if (mode.cls) card?.classList.add(mode.cls);
+  e.currentTarget.textContent = `💡 ไฟขอบจอ: ${mode.label}`;
+  e.currentTarget.classList.toggle('active', ringLightIndex > 0);
+});
+
+const burstGapSelect = document.querySelector('#burstGapSelect');
+document.querySelector('#btnToolShutterMode')?.addEventListener('click', e => {
+  manualShutterMode = !manualShutterMode;
+  e.currentTarget.textContent = manualShutterMode ? '👆 กดทีละช็อต' : '⚡ ถ่ายรัว';
+  e.currentTarget.classList.toggle('active', manualShutterMode);
+  burstGapSelect?.classList.toggle('hidden', manualShutterMode);
+});
+burstGapSelect?.addEventListener('change', e => {
+  burstGapSeconds = Math.max(1, Math.min(3, Number(e.target.value) || 1));
+});
+
+function triggerScreenFlash() {
+  const flash = document.querySelector('#camFlashOverlay');
+  if (flash) {
+    flash.classList.add('flash');
+    requestAnimationFrame(() => {
+      setTimeout(() => flash.classList.remove('flash'), 45);
+    });
+  }
+  if (soundEnabled) playShutterSound();
+}
+
+function renderCamShotPreview(frames, total) {
+  const strip = document.querySelector('#camShotPreviewStrip');
+  if (!strip) return;
+  if (total <= 1) {
+    strip.classList.add('hidden');
+    strip.replaceChildren();
+    return;
+  }
+  strip.classList.remove('hidden');
+  strip.replaceChildren(...Array.from({ length: total }, (_, i) => {
+    const slot = document.createElement('div');
+    slot.className = `cam-shot-thumb ${frames[i] ? 'captured' : ''}`;
+    if (frames[i]) {
+      const img = document.createElement('img');
+      img.src = frames[i].toDataURL('image/jpeg', 0.65);
+      img.alt = `ช็อต ${i + 1}`;
+      slot.append(img);
+    } else {
+      slot.textContent = `${i + 1}`;
+    }
+    return slot;
+  }));
 }
 
 function updateProgress(percentage, message) {
@@ -516,6 +1075,17 @@ function applyLiveStreamFilters() {
   const zoomScale = `scale(${usingCssZoom ? activeZoom : 1})`;
   videoElement.style.transform = `${mirrorScale} ${zoomScale}`;
 }
+
+document.querySelector('#shootPickSelect')?.addEventListener('change', e => {
+  shootPickTotal = Number(e.target.value) || 0;
+});
+
+document.querySelector('#btnToolLiveVideo')?.addEventListener('click', e => {
+  liveVideoMode = !liveVideoMode;
+  e.currentTarget.classList.toggle('active', liveVideoMode);
+  e.currentTarget.setAttribute('aria-pressed', String(liveVideoMode));
+  showToast(liveVideoMode ? 'เปิดโหมด Live Strip แล้ว — จะอัดคลิปสั้น ~2 วิในแต่ละช็อต' : 'ปิดโหมด Live Strip แล้ว');
+});
 
 // 1. Aspect Ratio Cycling (4:3 -> 1:1 -> 16:9)
 const ASPECT_STEPS = ['4:3', '1:1', '16:9'];
@@ -728,6 +1298,7 @@ async function handleSwitchCamera() {
   if (btnSwitch) btnSwitch.disabled = true;
   try {
     await switchCamera(videoElement);
+    manualMirrorOverride = null;
     updateMirrorState();
     usingCssZoom = true;
     applyLiveStreamFilters();
@@ -769,59 +1340,6 @@ function captureSingleFrame(filterOptions) {
   offCtx.drawImage(videoElement, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, w, h);
   if (!nativeFilter) applyPixelFilter(offscreen, filterOptions.filter);
   return offscreen;
-}
-
-/* Frame Catalog Handler ย้ายไปผูกใน renderFrameGallery() แล้ว
-   (ของเดิมผูกครั้งเดียวตอนบูต กรอบที่อัปโหลดทีหลังจึงกดไม่ได้) */
-
-/**
- * --- Custom Frame Upload ---
- */
-
-// ค่า alpha ที่ยังถือว่า "ทึบ"
-const FRAME_OPAQUE_ALPHA = 250;
-
-
-/**
- * ตรวจพื้นที่กลางภาพ (40% ตรงกลาง) ว่าโปร่งใสพอจะเป็นช่องใส่รูปหรือยัง
- * และคืนสีเฉลี่ยตรงกลางไว้ใช้เป็น targetBgColor ตอนตัดพื้นหลัง
- */
-async function inspectFrameCenter(blob) {
-  const img = await loadImageFromBlob(blob);
-  const iw = img.naturalWidth || img.width;
-  const ih = img.naturalHeight || img.height;
-  if (!iw || !ih) throw new Error('ภาพไม่มีขนาด');
-
-  const k = Math.min(1, 256 / Math.max(iw, ih));
-  const w = Math.max(1, Math.round(iw * k));
-  const h = Math.max(1, Math.round(ih * k));
-
-  const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  const cx = c.getContext('2d', { willReadFrequently: true });
-  cx.drawImage(img, 0, 0, w, h);
-
-  const x0 = Math.floor(w * 0.3);
-  const y0 = Math.floor(h * 0.3);
-  const cw = Math.max(1, Math.ceil(w * 0.7) - x0);
-  const ch = Math.max(1, Math.ceil(h * 0.7) - y0);
-  const data = cx.getImageData(x0, y0, cw, ch).data;
-
-  let opaque = 0, total = 0, r = 0, g = 0, b = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    total++;
-    if (data[i + 3] >= FRAME_OPAQUE_ALPHA) {
-      opaque++;
-      r += data[i]; g += data[i + 1]; b += data[i + 2];
-    }
-  }
-
-  const ratio = total ? opaque / total : 0;
-  return {
-    isOpaque: ratio > 0.9,
-    color: opaque ? [Math.round(r / opaque), Math.round(g / opaque), Math.round(b / opaque)] : [255, 255, 255]
-  };
 }
 
 /**
@@ -1021,109 +1539,6 @@ btnCutoutApply?.addEventListener('click', async () => {
   closeCutoutPicker(blob);
 });
 
-// เจาะเองกับกรอบที่อัปโหลดล่าสุด
-btnManualCutout?.addEventListener('click', async () => {
-  if (!lastUploadedFrameBlob) return;
-  const blob = await openCutoutPicker(lastUploadedFrameBlob);
-  if (!blob) return;
-
-  hideError();
-  lastUploadedFrameBlob = blob;
-  lastUploadedFrameUrl = URL.createObjectURL(blob);
-  await addLayer({
-    type: 'frame',
-    image: lastUploadedFrameUrl,
-    id: `custom-frame-${Date.now()}`
-  });
-  refreshLayerListUI();
-  updateStatus(true, 'อัปเดตกรอบตามช่องที่เลือกแล้ว');
-});
-
-async function handleFrameUpload(e) {
-  const file = e.target.files?.[0];
-  e.target.value = '';
-  if (!file) return;
-
-  hideError();
-  let finalBlob = file;
-
-  try {
-    const before = await inspectFrameCenter(file);
-
-    if (before.isOpaque) {
-      const wantsCutout = confirm(
-        'ภาพนี้ทึบทั้งใบ ถ้าใช้เป็นกรอบจะบังรูปถ่ายทั้งหมด\n\n' +
-        'ต้องการให้เจาะช่องใส่รูปให้โปร่งใสไหม?'
-      );
-
-      if (wantsCutout) {
-        try {
-          updateProgress(10, 'กำลังตรวจหาช่องใส่รูป...');
-          // หว่าน probe ทั่วภาพแล้วคัดเฉพาะบริเวณที่เป็นช่องใส่รูป
-          // (ของเดิมหว่าน seed ที่กลางภาพจุดเดียว จึงพังกับกรอบหลายช่อง
-          //  เพราะกลางภาพมักตกบนเส้นคั่นระหว่างช่อง แล้วไหลไปกินพื้นหลังกรอบแทน)
-          const { candidates } = await cutoutFrameSlots(file, {
-            detectOnly: true,
-            onProgress: ({ progress, message }) => updateProgress(progress, message)
-          });
-          hideProgress();
-          const processed = await openCutoutPicker(file, true, candidates);
-          if (processed) finalBlob = processed;
-        } finally {
-          setTimeout(hideProgress, 1200);
-        }
-
-
-      }
-    }
-  } catch (err) {
-    showError(`ไม่สามารถใช้ไฟล์นี้เป็นกรอบได้: ${err.message}`);
-    return;
-  }
-
-  lastUploadedFrameBlob = finalBlob;
-  lastUploadedFrameUrl = URL.createObjectURL(finalBlob);
-
-  await addLayer({
-    type: 'frame',
-    image: lastUploadedFrameUrl,
-    id: `custom-frame-${Date.now()}`
-  });
-
-  frameActions.classList.remove('hidden');
-  refreshLayerListUI();
-}
-
-/**
- * Save Custom Frame to Gallery Catalog (and Supabase Storage)
- */
-btnSaveCustomFrame?.addEventListener('click', async () => {
-  if (!lastUploadedFrameUrl) return;
-
-  const frameName = prompt('ตั้งชื่อกรอบรูปที่ต้องการบันทึก:', 'กรอบส่วนตัว') || 'กรอบส่วนตัว';
-  let finalUrl = lastUploadedFrameUrl;
-  let frameId = `custom-${Date.now()}`;
-
-  if (currentUser && isSupabaseConfigured && lastUploadedFrameBlob) {
-    try {
-      const frameRecord = await supabaseService.uploadFrame(lastUploadedFrameBlob, frameName);
-      if (frameRecord && frameRecord.image_url) {
-        finalUrl = frameRecord.image_url;
-        frameId = frameRecord.frame_id || frameId;
-      }
-    } catch (err) {
-      console.warn('Could not upload frame to Supabase:', err.message);
-      showError(`บันทึกขึ้น Supabase ไม่สำเร็จ: ${err.message} (ยังใช้กรอบนี้ได้ในเซสชันนี้)`);
-    }
-  }
-
-  FRAMES_CATALOG.unshift({ id: frameId, name: frameName, src: finalUrl });
-  renderFrameGallery();
-
-  alert(`🎉 บันทึกกรอบ "${frameName}" เรียบร้อยแล้ว! เลือกใช้ได้จากแถบ 🖼️ กรอบรูป`);
-  frameActions.classList.add('hidden');
-});
-
 /**
  * Custom Sticker Upload with AI + Smart Color-Key Background Removal
  */
@@ -1159,6 +1574,7 @@ async function handleStickerUpload(e) {
     await addLayer({
       type: 'sticker',
       image: lastUploadedStickerUrl,
+      label: 'สติกเกอร์ที่อัปโหลด',
       id: `custom-sticker-${Date.now()}`,
       x: 500,
       y: 300,
@@ -1183,7 +1599,9 @@ stickerUploader.addEventListener('change', handleStickerUpload);
 btnSaveCustomSticker.addEventListener('click', async () => {
   if (!lastUploadedStickerUrl) return;
 
-  const stickerName = prompt('ตั้งชื่อสติกเกอร์ที่ต้องการบันทึก:', 'สติกเกอร์ส่วนตัว') || 'สติกเกอร์ส่วนตัว';
+  const enteredName = await showPromptDialog('ตั้งชื่อสติกเกอร์ที่ต้องการบันทึก:', 'สติกเกอร์ส่วนตัว', { confirmText: 'บันทึก' });
+  if (enteredName === null) return;
+  const stickerName = enteredName.trim() || 'สติกเกอร์ส่วนตัว';
   let finalUrl = lastUploadedStickerUrl;
   let stickerId = `custom-${Date.now()}`;
 
@@ -1209,9 +1627,23 @@ btnSaveCustomSticker.addEventListener('click', async () => {
   STICKERS_CATALOG.unshift(newSticker);
   renderStickerGallery();
 
-  alert(`🎉 บันทึกสติกเกอร์ "${stickerName}" เรียบร้อยแล้ว! สามารถเลือกใช้งานได้จากแถบ ⭐ สติกเกอร์`);
+  showToast(`บันทึกสติกเกอร์ "${stickerName}" เรียบร้อยแล้ว`, 'success');
   btnSaveCustomSticker.classList.add('hidden');
 });
+
+function getLayerDisplayName(layer) {
+  if (layer.type === 'base') return 'ภาพถ่ายหลัก';
+  if (layer.label) return layer.label;
+  if (layer.type === 'sticker') {
+    const matched = STICKERS_CATALOG.find(s => layer.id.startsWith(`sticker-${s.id}-`) || layer.src === s.src);
+    return matched ? matched.name : 'สติกเกอร์';
+  }
+  if (layer.type === 'frame') {
+    const matched = FRAMES_CATALOG.find(f => layer.id === `frame-${f.id}` || layer.src === f.src);
+    return matched ? matched.name : 'กรอบรูป';
+  }
+  return 'องค์ประกอบ';
+}
 
 /**
  * Layer List UI
@@ -1231,44 +1663,71 @@ function refreshLayerListUI() {
     const isSelected = layer.id === selectedId;
     item.className = `layer-item ${isSelected ? 'selected' : ''}`;
 
-    const typeTag = layer.type === 'base' ? '[L1 Base]' : layer.type === 'sticker' ? '[L2 Sticker]' : '[L3 Frame]';
+    const info = document.createElement('div');
+    info.className = 'layer-info';
+    info.addEventListener('click', () => selectLayer(layer.id));
 
-    item.innerHTML = `
-      <div class="layer-info" data-id="${layer.id}">
-        <span class="layer-tag ${layer.type}">${typeTag}</span>
-        <span class="layer-name">${layer.id}</span>
-      </div>
-      ${
-        layer.type !== 'base'
-          ? `<div class="layer-controls">
-              <label>Rot: <input type="range" class="rot-slider" min="0" max="360" value="${layer.rotation || 0}" data-id="${layer.id}"></label>
-              <label>Scale: <input type="range" class="scale-slider" min="0.2" max="3" step="0.1" value="${layer.scale || 1}" data-id="${layer.id}"></label>
-              <button class="btn-icon btn-del" data-id="${layer.id}">🗑️</button>
-            </div>`
-          : ''
-      }
-    `;
+    if (layer.type !== 'base' && isSafeImageSrc(layer.src)) {
+      const thumb = document.createElement('img');
+      thumb.className = 'layer-thumb';
+      thumb.src = layer.src;
+      thumb.alt = '';
+      info.append(thumb);
+    } else {
+      const ico = document.createElement('span');
+      ico.className = 'layer-thumb-icon';
+      ico.textContent = layer.type === 'base' ? '📸' : layer.type === 'frame' ? '🖼️' : '⭐';
+      info.append(ico);
+    }
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'layer-name';
+    nameSpan.textContent = getLayerDisplayName(layer);
+    info.append(nameSpan);
+    item.append(info);
+
+    if (layer.type !== 'base') {
+      const controls = document.createElement('div');
+      controls.className = 'layer-controls';
+
+      const rotLabel = document.createElement('label');
+      rotLabel.textContent = 'หมุน: ';
+      const rotSlider = document.createElement('input');
+      rotSlider.type = 'range';
+      rotSlider.className = 'rot-slider';
+      rotSlider.min = '0';
+      rotSlider.max = '360';
+      rotSlider.value = String(layer.rotation || 0);
+      rotSlider.addEventListener('input', e => updateLayer(layer.id, { rotation: parseFloat(e.target.value) }));
+      rotLabel.append(rotSlider);
+
+      const scaleLabel = document.createElement('label');
+      scaleLabel.textContent = 'ขนาด: ';
+      const scaleSlider = document.createElement('input');
+      scaleSlider.type = 'range';
+      scaleSlider.className = 'scale-slider';
+      scaleSlider.min = '0.2';
+      scaleSlider.max = '3';
+      scaleSlider.step = '0.1';
+      scaleSlider.value = String(layer.scale || 1);
+      scaleSlider.addEventListener('input', e => updateLayer(layer.id, { scale: parseFloat(e.target.value) }));
+      scaleLabel.append(scaleSlider);
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'btn-icon btn-del';
+      delBtn.textContent = '🗑️';
+      delBtn.title = 'ลบชั้นนี้';
+      delBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        removeLayer(layer.id);
+      });
+
+      controls.append(rotLabel, scaleLabel, delBtn);
+      item.append(controls);
+    }
 
     layerList.appendChild(item);
-  });
-
-  document.querySelectorAll('.layer-info').forEach(info => {
-    info.addEventListener('click', (e) => selectLayer(e.currentTarget.dataset.id));
-  });
-
-  document.querySelectorAll('.rot-slider').forEach(slider => {
-    slider.addEventListener('input', (e) => updateLayer(e.target.dataset.id, { rotation: parseFloat(e.target.value) }));
-  });
-
-  document.querySelectorAll('.scale-slider').forEach(slider => {
-    slider.addEventListener('input', (e) => updateLayer(e.target.dataset.id, { scale: parseFloat(e.target.value) }));
-  });
-
-  document.querySelectorAll('.btn-del').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      removeLayer(e.target.dataset.id);
-    });
   });
 }
 
@@ -1277,9 +1736,10 @@ function refreshLayerListUI() {
  */
 btnAuthModal.addEventListener('click', async () => {
   if (currentUser) {
-    if (confirm('คุณต้องการออกจากระบบหรือไม่?')) {
+    if (await showConfirmDialog('คุณต้องการออกจากระบบหรือไม่?', { confirmText: 'ออกจากระบบ', danger: true })) {
       await supabaseService.signOut();
       updateUserAuthUI(null);
+      showToast('ออกจากระบบเรียบร้อยแล้ว');
     }
   } else {
     authModal.classList.remove('hidden');
@@ -1317,10 +1777,10 @@ authForm.addEventListener('submit', async (e) => {
     let user;
     if (authMode === 'login') {
       user = await supabaseService.signIn(email, password);
-      alert('🎉 เข้าสู่ระบบสำเร็จ!');
+      showToast('เข้าสู่ระบบสำเร็จ!', 'success');
     } else {
       user = await supabaseService.signUp(email, password);
-      alert('🎉 สมัครสมาชิกสำเร็จ!');
+      showToast('สมัครสมาชิกสำเร็จ!', 'success');
     }
     updateUserAuthUI(user);
     authModal.classList.add('hidden');
@@ -1330,11 +1790,57 @@ authForm.addEventListener('submit', async (e) => {
 });
 
 /**
+ * สร้างภาพปกเทมเพลตขนาดย่อ (เฉพาะพื้นหลัง + กรอบ + สติกเกอร์ ไม่รวมรูปถ่ายส่วนตัว)
+ */
+async function buildTemplateCoverBlob() {
+  const w = canvasElement.width || 960;
+  const h = canvasElement.height || 720;
+  const scale = Math.min(1, 480 / Math.max(w, h));
+  const cw = Math.max(1, Math.round(w * scale));
+  const ch = Math.max(1, Math.round(h * scale));
+  const c = document.createElement('canvas');
+  c.width = cw;
+  c.height = ch;
+  const g = c.getContext('2d');
+  g.fillStyle = activeStripBgColor || '#FFF5F7';
+  g.fillRect(0, 0, cw, ch);
+
+  const layout = capturedContext?.frameLayout
+    || (capturedFrames.length
+      ? getStripLayout(capturedFrames.length, 960, capturedContext?.aspectRatio || 4 / 3, capturedContext?.stripOrientation || 'vertical')
+      : null);
+  if (layout) {
+    const sx = cw / layout.width;
+    const sy = ch / layout.height;
+    g.fillStyle = '#E5DCEB';
+    layout.slots.forEach(slot => {
+      g.fillRect(slot.x * sx, slot.y * sy, slot.width * sx, slot.height * sy);
+    });
+  }
+
+  if (capturedContext?.decoration) {
+    g.drawImage(capturedContext.decoration, 0, 0, cw, ch);
+  }
+  const layerScale = Math.min(cw / w, ch / h);
+  for (const layer of getLayers().filter(l => l.type !== 'base' && l.image)) {
+    g.save();
+    g.globalAlpha = layer.opacity ?? 1;
+    g.translate((layer.x / w) * cw, (layer.y / h) * ch);
+    g.rotate(((layer.rotation || 0) * Math.PI) / 180);
+    const dw = layer.width * layerScale * (layer.scaleX || 1) * (layer.scale || 1);
+    const dh = layer.height * layerScale * (layer.scaleY || 1) * (layer.scale || 1);
+    g.drawImage(layer.image, -dw / 2, -dh / 2, dw, dh);
+    g.restore();
+  }
+  return new Promise(resolve => c.toBlob(resolve, 'image/png'));
+}
+
+/**
  * Save Template Modal Logic
  */
 btnSaveTemplate.addEventListener('click', () => {
   if (!currentUser) {
-    alert('กรุณาเข้าสู่ระบบก่อนเพื่อบันทึกเทมเพลต');
+    showToast('กรุณาเข้าสู่ระบบก่อนเพื่อบันทึกเทมเพลต');
     authModal.classList.remove('hidden');
     return;
   }
@@ -1351,21 +1857,56 @@ saveTemplateForm.addEventListener('submit', async (e) => {
 
   const name = tplName.value.trim();
   const isShared = chkSharePublic.checked;
+  const submitBtn = saveTemplateForm.querySelector('button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = true;
   try {
     const designData = serializeDesignData();
-    if (lastCaptureSettings) designData.capture = { ...lastCaptureSettings };
+    if (lastCaptureSettings) {
+      const capture = { ...lastCaptureSettings };
+      // อัปโหลดกรอบแบบกำหนดเองขึ้น Storage เพื่อเก็บเป็น URL แทน Base64 ขนาดใหญ่ในฐานข้อมูล
+      if (capturedContext?.frame && capturedContext?.decoration && !isBuiltinFrame(capturedContext.frame.id)) {
+        const outputLayout = capturedContext.frameLayout
+          || getStripLayout(capture.count, 960, capturedContext.aspectRatio, capturedContext.stripOrientation);
+        try {
+          const frameBlob = await renderFrameToBlob(capturedContext.decoration, outputLayout);
+          const frameUrl = await supabaseService.uploadTemplateImage(frameBlob, 'template-frames');
+          if (frameUrl) {
+            capture.frame = {
+              name: capturedContext.frame.name,
+              src: frameUrl,
+              layout: capturedContext.frame.layout ? structuredClone(outputLayout) : null
+            };
+          }
+        } catch (uploadErr) {
+          console.warn('Upload template frame to storage failed, falling back:', uploadErr.message);
+        }
+      }
+      designData.capture = capture;
+    }
+
+    let coverImageUrl = null;
+    try {
+      const coverBlob = await buildTemplateCoverBlob();
+      if (coverBlob) coverImageUrl = await supabaseService.uploadTemplateImage(coverBlob, 'template-covers');
+    } catch (coverErr) {
+      console.warn('Upload template cover failed:', coverErr.message);
+    }
+
     await supabaseService.saveTemplate({
       name,
       designData,
+      coverImageUrl,
       isShared
     });
 
-    alert('☁️ บันทึกเทมเพลตลง Supabase เรียบร้อยแล้ว!');
+    showToast('บันทึกเทมเพลตบนคลาวด์เรียบร้อยแล้ว!', 'success');
     saveTemplateModal.classList.add('hidden');
     tplName.value = '';
     chkSharePublic.checked = false;
   } catch (err) {
     showError(err.message);
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
   }
 });
 
@@ -1386,8 +1927,21 @@ tabSharedTemplates.addEventListener('click', () => {
   loadTemplateGallery();
 });
 
+function getTemplatePreviewSrc(template) {
+  if (isSafeImageSrc(template.cover_image_url)) return template.cover_image_url;
+  const design = typeof template.design_data === 'string'
+    ? (() => { try { return JSON.parse(template.design_data); } catch { return null; } })()
+    : template.design_data;
+  const frame = design?.capture?.frame;
+  if (frame?.builtinId && isBuiltinFrame(frame.builtinId)) {
+    return buildBuiltinFrameDataUrl(frame.builtinId, 480, 320);
+  }
+  if (isSafeImageSrc(frame?.src)) return frame.src;
+  return null;
+}
+
 async function loadTemplateGallery() {
-  templateGrid.innerHTML = '<p class="loading-text">กำลังโหลดเทมเพลตจาก Supabase...</p>';
+  templateGrid.innerHTML = '<p class="loading-text">กำลังโหลดเทมเพลตจากคลาวด์...</p>';
 
   try {
     let templates = [];
@@ -1421,20 +1975,48 @@ async function loadTemplateGallery() {
     templates.forEach(t => {
       const card = document.createElement('div');
       card.className = 'template-card';
-      card.innerHTML = `
-        <div class="template-card-header">
-          <h4>${t.name}</h4>
-          ${t.is_shared ? '<span class="badge-shared">🌐 สาธารณะ</span>' : '<span class="badge-private">🔒 ส่วนตัว</span>'}
-        </div>
-        <p class="template-date">📅 ${new Date(t.created_at).toLocaleDateString('th-TH')}</p>
-        <div class="template-card-actions">
-          <button class="btn btn-sm btn-primary btn-load-tpl" data-id="${t.template_id}">⚡ โหลดใช้งาน</button>
-          ${templateCategory === 'my' ? `<button class="btn-icon btn-del-tpl" data-id="${t.template_id}">🗑️</button>` : ''}
-        </div>
-      `;
+
+      const thumbBox = document.createElement('div');
+      thumbBox.className = 'template-thumb';
+      const previewSrc = getTemplatePreviewSrc(t);
+      if (previewSrc) {
+        const img = document.createElement('img');
+        img.src = previewSrc;
+        img.alt = t.name || 'ตัวอย่างเทมเพลต';
+        img.loading = 'lazy';
+        thumbBox.append(img);
+      } else {
+        const placeholder = document.createElement('span');
+        placeholder.className = 'template-thumb-placeholder';
+        placeholder.textContent = '🖼️';
+        thumbBox.append(placeholder);
+      }
+
+      const header = document.createElement('div');
+      header.className = 'template-card-header';
+      const titleEl = document.createElement('h4');
+      titleEl.textContent = t.name || 'เทมเพลตไม่มีชื่อ';
+      const badge = document.createElement('span');
+      badge.className = t.is_shared ? 'badge-shared' : 'badge-private';
+      badge.textContent = t.is_shared ? '🌐 สาธารณะ' : '🔒 ส่วนตัว';
+      header.append(titleEl, badge);
+
+      const dateEl = document.createElement('p');
+      dateEl.className = 'template-date';
+      dateEl.textContent = `📅 ${new Date(t.created_at).toLocaleDateString('th-TH')}`;
+
+      const actions = document.createElement('div');
+      actions.className = 'template-card-actions';
+      const btnLoad = document.createElement('button');
+      btnLoad.type = 'button';
+      btnLoad.className = 'btn btn-sm btn-primary btn-load-tpl';
+      btnLoad.textContent = '⚡ โหลดใช้งาน';
+      actions.append(btnLoad);
+
+      card.append(thumbBox, header, dateEl, actions);
       templateGrid.appendChild(card);
 
-      card.querySelector('.btn-load-tpl').addEventListener('click', async event => {
+      btnLoad.addEventListener('click', async event => {
         const button = event.currentTarget;
         button.disabled = true;
         hideError();
@@ -1442,7 +2024,11 @@ async function loadTemplateGallery() {
           const design = typeof t.design_data === 'string' ? JSON.parse(t.design_data) : structuredClone(t.design_data);
           let count = design?.capture?.count;
           if (!Number.isInteger(count) || count < 1 || count > 4) {
-            const answer = prompt('เทมเพลตเก่านี้ยังไม่ระบุจำนวนภาพ ต้องการใช้กี่ภาพ (1–4)? ระบบจะล็อคจำนวนนี้ขณะใช้เทมเพลต บันทึกเทมเพลตใหม่เพื่อจำจำนวนไว้', '4');
+            const answer = await showPromptDialog(
+              'เทมเพลตเก่านี้ยังไม่ระบุจำนวนภาพ ต้องการใช้กี่ภาพ (1–4)?',
+              '4',
+              { confirmText: 'ยืนยัน' }
+            );
             if (answer === null) return;
             count = Number(answer);
             if (!Number.isInteger(count) || count < 1 || count > 4) throw new Error('กรุณาระบุจำนวนภาพเป็นเลข 1–4');
@@ -1471,19 +2057,30 @@ async function loadTemplateGallery() {
         }
       });
 
-      const btnDel = card.querySelector('.btn-del-tpl');
-      if (btnDel) {
+      if (templateCategory === 'my') {
+        const btnDel = document.createElement('button');
+        btnDel.type = 'button';
+        btnDel.className = 'btn-icon btn-del-tpl';
+        btnDel.textContent = '🗑️';
+        btnDel.title = 'ลบเทมเพลตนี้';
+        actions.append(btnDel);
+
         btnDel.addEventListener('click', async (e) => {
           e.stopPropagation();
-          if (confirm(`คุณต้องการลบเทมเพลต "${t.name}" หรือไม่?`)) {
+          if (await showConfirmDialog(`คุณต้องการลบเทมเพลต "${t.name}" หรือไม่?`, { confirmText: 'ลบเทมเพลต', danger: true })) {
             await supabaseService.deleteTemplate(t.template_id);
+            showToast('ลบเทมเพลตเรียบร้อยแล้ว');
             loadTemplateGallery();
           }
         });
       }
     });
   } catch (err) {
-    templateGrid.innerHTML = `<p class="alert-error">เกิดข้อผิดพลาด: ${err.message}</p>`;
+    templateGrid.innerHTML = '';
+    const errEl = document.createElement('p');
+    errEl.className = 'alert-error';
+    errEl.textContent = `เกิดข้อผิดพลาด: ${err.message}`;
+    templateGrid.append(errEl);
   }
 }
 
@@ -1493,9 +2090,9 @@ async function loadTemplateGallery() {
 function handleSaveToSessionGallery() {
   try {
     const dataUrl = exportImage('image/png');
-    const photo = appUI.addSessionPhoto(dataUrl);
+    appUI.addSessionPhoto(dataUrl);
     galleryCount.textContent = appUI.getSessionPhotos().length;
-    alert('🎉 บันทึกภาพลงในคลังภาพเซสชันสำเร็จ!');
+    showToast('บันทึกภาพลงในคลังภาพเรียบร้อยแล้ว!', 'success');
   } catch (err) {
     showError(err.message);
   }
@@ -1543,13 +2140,14 @@ function renderSessionGallery() {
     });
   });
 
-  // ลบภาพในคลังเซสชัน (appUI.removeSessionPhoto มีอยู่แล้วแต่ไม่เคยถูกเรียก)
+  // ลบภาพในคลังภาพ
   document.querySelectorAll('.btn-del-photo').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       const photoId = e.currentTarget.dataset.id;
-      if (!confirm('ลบภาพนี้ออกจากคลังเซสชัน?')) return;
+      if (!(await showConfirmDialog('ลบภาพนี้ออกจากคลังภาพ?', { confirmText: 'ลบภาพ', danger: true }))) return;
       appUI.removeSessionPhoto(photoId);
       renderSessionGallery();
+      showToast('ลบภาพเรียบร้อยแล้ว');
     });
   });
 }
@@ -1578,9 +2176,16 @@ async function loadPhotoToEditor(dataUrl) {
     // setBaseLayerImage ปรับขนาด canvas ให้ตรงกับภาพให้เอง
     // (ของเดิมเรียก captureFrame() ซึ่งไปตั้งขนาด canvas เป็นขนาดวิดีโอ ไม่ใช่ขนาดภาพ)
     setBaseLayerImage(offscreen);
+    capturedFrames = [];
+    capturedGifFrames = [];
+    capturedContext = null;
+    retakingShotIndex = null;
+    renderShotRetakeBar();
     setGifPhotos([]);
     activeEditorFilter = 'none';
     renderEditorFilterRow();
+    renderEditorFrameRow();
+    renderEditorBgColorRow();
 
     refreshLayerListUI();
     switchTab('editor');
@@ -1591,11 +2196,11 @@ async function loadPhotoToEditor(dataUrl) {
 }
 
 // Global Event Listeners
-btnStopCamera?.addEventListener('click', handleStopCamera);
 btnSwitch?.addEventListener('click', handleSwitchCamera);
 btnCapture?.addEventListener('click', handleCapture);
 btnRetake?.addEventListener('click', () => {
   setGifPhotos([]);
+  setLiveClips([]);
   capturedFrames = [];
   capturedGifFrames = [];
   capturedContext = null;
@@ -1621,18 +2226,82 @@ btnExport?.addEventListener('click', async () => {
 
 btnSaveToGallery?.addEventListener('click', handleSaveToSessionGallery);
 
-document.querySelector('#btnExportGif').addEventListener('click', async event => {
-  const button = event.currentTarget;
-  const status = document.querySelector('#gifStatus');
-  const photos = gifPhotos;
-  button.disabled = true;
+// IG Story / TikTok 9:16 Export
+const storyPreviewDialog = document.querySelector('#storyPreviewDialog');
+const storyBgStyleSelect = document.querySelector('#storyBgStyleSelect');
+const storyPreviewImage = document.querySelector('#storyPreviewImage');
+
+async function renderStoryPreview() {
+  const cleanDataUrl = exportImage('image/png');
+  const img = new Image();
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = () => reject(new Error('เตรียมภาพ IG Story ไม่สำเร็จ'));
+    img.src = cleanDataUrl;
+  });
+  const storyCanvas = composeStoryCanvas(img, {
+    bgStyle: storyBgStyleSelect?.value || 'blur',
+    bgColor: activeStripBgColor
+  });
+  storyPreviewImage.src = storyCanvas.toDataURL('image/png');
+}
+
+document.querySelector('#btnExportStory')?.addEventListener('click', async () => {
   try {
-    const frameOverlay = getLayers().find(l => l.type === 'frame')?.image || null;
+    await renderStoryPreview();
+    storyPreviewDialog?.showModal();
+  } catch (err) {
+    showError(`สร้างภาพ IG Story ไม่สำเร็จ: ${err.message}`);
+  }
+});
+
+storyBgStyleSelect?.addEventListener('change', () => {
+  if (storyPreviewDialog?.open) renderStoryPreview().catch(err => showError(err.message));
+});
+
+document.querySelector('#btnCloseStoryPreview')?.addEventListener('click', () => storyPreviewDialog?.close());
+document.querySelector('#btnDownloadStory')?.addEventListener('click', async () => {
+  const dataUrl = storyPreviewImage?.getAttribute('src');
+  if (!dataUrl) return;
+  try {
+    await downloadDataUrl(dataUrl, 'snapframe-story-9x16.png', 'image/png');
+    storyPreviewDialog?.close();
+    showToast('บันทึกภาพ IG Story (9:16) เรียบร้อยแล้ว!', 'success');
+  } catch (err) {
+    showError(`บันทึกภาพ IG Story ไม่สำเร็จ: ${err.message}`);
+  }
+});
+
+// GIF / Boomerang Export with Live Speed & Boomerang Toggle
+async function renderGifPreview({ openDialog = false } = {}) {
+  const button = document.querySelector('#btnExportGif');
+  const status = document.querySelector('#gifStatus');
+  const previewStatus = document.querySelector('#gifPreviewStatus');
+  const photos = gifPhotos;
+  if (photos.length < 2) return;
+  button.disabled = true;
+  if (previewStatus) previewStatus.textContent = 'กำลังสร้าง GIF...';
+  try {
+    let frameOverlay = getLayers().find(l => l.type === 'frame')?.image || null;
+    if (!frameOverlay && capturedContext?.frame && !capturedContext.frameLayout && photos[0]) {
+      frameOverlay = await loadStripDecoration(capturedContext.frame, photos[0].width, photos[0].height);
+    }
     const stickers = getLayers().filter(l => l.type === 'sticker');
     const sourceSize = { width: canvasElement.width, height: canvasElement.height };
-    const blob = await encodePhotoGif(readGifFrames(photos, frameOverlay, stickers, sourceSize), (current, total) => {
-      status.textContent = `กำลังสร้าง GIF ${current}/${total}…`;
-    });
+    const delay = Number(document.querySelector('#gifSpeedSelect')?.value) || 450;
+    const boomerang = Boolean(document.querySelector('#chkGifBoomerang')?.checked);
+    const blob = await encodePhotoGif(
+      readGifFrames(photos, frameOverlay, stickers, sourceSize, {
+        filter: activeEditorFilter,
+        doodle: getDoodleCanvas()
+      }),
+      (current, total) => {
+        const msg = `กำลังสร้าง ${boomerang ? 'Boomerang' : 'GIF'} ${current}/${total}…`;
+        status.textContent = msg;
+        if (previewStatus) previewStatus.textContent = msg;
+      },
+      { delay, boomerang }
+    );
     const dataUrl = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result);
@@ -1644,13 +2313,68 @@ document.querySelector('#btnExportGif').addEventListener('click', async event =>
     preview.src = dataUrl;
     await preview.decode();
     if (photos !== gifPhotos) return;
-    document.querySelector('#gifPreviewStatus').textContent = '';
-    document.querySelector('#gifPreviewDialog').showModal();
-    status.textContent = 'พรีวิวพร้อมแล้ว ตรวจภาพเคลื่อนไหวก่อนกดดาวน์โหลด GIF';
+    if (previewStatus) previewStatus.textContent = '';
+    if (openDialog && !gifPreviewDialog.open) gifPreviewDialog.showModal();
+    status.textContent = 'พรีวิวพร้อมแล้ว ปรับความเร็วหรือเปิด Boomerang แล้วกดดาวน์โหลดได้เลย';
   } catch (error) {
     status.textContent = `สร้าง GIF ไม่สำเร็จ: ${error.message}`;
+    if (previewStatus) previewStatus.textContent = `สร้าง GIF ไม่สำเร็จ: ${error.message}`;
   } finally {
     button.disabled = gifPhotos.length < 2;
+  }
+}
+
+document.querySelector('#btnExportGif').addEventListener('click', () => renderGifPreview({ openDialog: true }));
+document.querySelector('#gifSpeedSelect')?.addEventListener('change', () => {
+  if (gifPreviewDialog.open) renderGifPreview({ openDialog: false });
+});
+document.querySelector('#chkGifBoomerang')?.addEventListener('change', () => {
+  if (gifPreviewDialog.open) renderGifPreview({ openDialog: false });
+});
+
+// Live Strip Video Export (MP4/WebM)
+document.querySelector('#btnExportLiveVideo')?.addEventListener('click', async e => {
+  const button = e.currentTarget;
+  const status = document.querySelector('#gifStatus');
+  if (!capturedLiveClips.length || !capturedContext) return;
+  button.disabled = true;
+  try {
+    const stickers = getLayers().filter(l => l.type === 'sticker');
+    const sourceSize = { width: canvasElement.width, height: canvasElement.height };
+    const { blob, ext } = await exportLiveStripVideo(
+      capturedLiveClips,
+      {
+        decoration: capturedContext.decoration,
+        aspectRatio: capturedContext.aspectRatio,
+        frameLayout: capturedContext.frameLayout,
+        stripOrientation: capturedContext.stripOrientation,
+        stripOptions: {
+          bgColor: activeStripBgColor,
+          bgPattern: activeStripBgPattern,
+          filter: activeEditorFilter,
+          footerText: activeStripFooterText,
+          showDate: activeStripShowDate,
+          footerFont: activeStripFooterFont
+        },
+        stickers,
+        doodle: getDoodleCanvas(),
+        sourceSize
+      },
+      (cur, total) => { status.textContent = `กำลังสร้างวิดีโอ Live Strip ${Math.round((cur / total) * 100)}%…`; }
+    );
+    const url = URL.createObjectURL(blob);
+    try {
+      await downloadDataUrl(url, `snapframe-live-strip.${ext}`, blob.type);
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }
+    status.textContent = `บันทึกวิดีโอ Live Strip (.${ext}) เรียบร้อยแล้ว!`;
+    showToast(`ดาวน์โหลดวิดีโอ Live Strip (.${ext}) เรียบร้อยแล้ว!`, 'success');
+  } catch (err) {
+    status.textContent = `สร้างวิดีโอ Live Strip ไม่สำเร็จ: ${err.message}`;
+    showError(err.message);
+  } finally {
+    button.disabled = capturedLiveClips.length === 0;
   }
 });
 
@@ -1807,6 +2531,7 @@ function renderStripPreview(preview) {
   preview.classList.toggle('strip-preview-horizontal', layout.width > layout.height);
   preview.setAttribute('aria-label', `ตัวอย่าง ${activeBurstCount} ภาพ${getStripDirectionLabel()}`);
   preview.style.aspectRatio = `${layout.width} / ${layout.height}`;
+  preview.style.background = selectedStripFrame?.layout ? '' : activeStripBgColor;
   layout.slots.forEach((rect, index) => {
     const slot = document.createElement('div');
     slot.className = 'strip-preview-slot';
@@ -1823,37 +2548,273 @@ function renderStripPreview(preview) {
   if (selectedStripFrame) {
     const overlay = document.createElement('img');
     overlay.className = 'strip-whole-frame';
-    overlay.src = selectedStripFrame.src;
+    overlay.src = buildBuiltinFrameDataUrl(selectedStripFrame.id, layout.width, layout.height) || selectedStripFrame.src;
     overlay.alt = 'กรอบเดียวคลุมทั้งแถบ';
     preview.append(overlay);
   }
+}
+
+function swapCapturedShots(indexA, indexB) {
+  if (!capturedFrames[indexA] || !capturedFrames[indexB]) return;
+  [capturedFrames[indexA], capturedFrames[indexB]] = [capturedFrames[indexB], capturedFrames[indexA]];
+  if (capturedGifFrames[indexA] && capturedGifFrames[indexB]) {
+    [capturedGifFrames[indexA], capturedGifFrames[indexB]] = [capturedGifFrames[indexB], capturedGifFrames[indexA]];
+    setGifPhotos([...capturedGifFrames]);
+  }
+  rebuildEditorStrip();
+  renderShotRetakeBar();
 }
 
 function renderShotRetakeBar() {
   const bar = document.querySelector('#shotRetakeBar');
   const container = document.querySelector('#shotRetakeButtons');
   if (!bar || !container) return;
-  if (capturedFrames.length < 2) {
+  if (capturedFrames.length < 1) {
     bar.classList.add('hidden');
     container.replaceChildren();
     return;
   }
   bar.classList.remove('hidden');
-  container.replaceChildren(...capturedFrames.map((_, index) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'btn btn-sm btn-secondary';
-    btn.textContent = `ช็อต ${index + 1}`;
-    btn.addEventListener('click', () => {
+  container.replaceChildren(...capturedFrames.map((frameCanvas, index) => {
+    const card = document.createElement('div');
+    card.className = 'shot-manage-card';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'shot-manage-thumb';
+    thumb.src = frameCanvas.toDataURL('image/jpeg', 0.6);
+    thumb.alt = `ช็อต ${index + 1}`;
+    card.append(thumb);
+
+    const num = document.createElement('span');
+    num.textContent = `#${index + 1}`;
+    card.append(num);
+
+    if (capturedFrames.length > 1) {
+      const btnLeft = document.createElement('button');
+      btnLeft.type = 'button';
+      btnLeft.className = 'btn-mini';
+      btnLeft.textContent = '◀';
+      btnLeft.title = 'เลื่อนไปก่อนหน้า';
+      btnLeft.disabled = index === 0;
+      btnLeft.addEventListener('click', () => swapCapturedShots(index, index - 1));
+
+      const btnRight = document.createElement('button');
+      btnRight.type = 'button';
+      btnRight.className = 'btn-mini';
+      btnRight.textContent = '▶';
+      btnRight.title = 'เลื่อนไปถัดไป';
+      btnRight.disabled = index === capturedFrames.length - 1;
+      btnRight.addEventListener('click', () => swapCapturedShots(index, index + 1));
+      card.append(btnLeft, btnRight);
+    }
+
+    const btnRetakeShot = document.createElement('button');
+    btnRetakeShot.type = 'button';
+    btnRetakeShot.className = 'btn-mini';
+    btnRetakeShot.textContent = '📷';
+    btnRetakeShot.title = `ถ่ายซ่อมช็อต ${index + 1}`;
+    btnRetakeShot.addEventListener('click', () => {
       retakingShotIndex = index;
+      hasChosenStrip = true;
       switchTab('camera');
       updateStatus(true, `ถ่ายซ่อมช็อตที่ ${index + 1}/${capturedFrames.length} — กดปุ่มถ่ายภาพ`);
     });
-    return btn;
+
+    const btnReplace = document.createElement('button');
+    btnReplace.type = 'button';
+    btnReplace.className = 'btn-mini';
+    btnReplace.textContent = '📁';
+    btnReplace.title = `เปลี่ยนช็อต ${index + 1} ด้วยรูปจากเครื่อง`;
+    btnReplace.addEventListener('click', () => {
+      replacingShotIndex = index;
+      document.querySelector('#shotReplaceUploader')?.click();
+    });
+
+    card.append(btnRetakeShot, btnReplace);
+    return card;
   }));
 }
 
+async function fileToFittedCanvas(file, targetAspect) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error(`อ่านไฟล์ "${file.name}" ไม่สำเร็จ`));
+      img.src = url;
+    });
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    let sw = iw, sh = ih;
+    if (iw / ih > targetAspect) {
+      sh = ih;
+      sw = Math.round(ih * targetAspect);
+    } else {
+      sw = iw;
+      sh = Math.round(iw / targetAspect);
+    }
+    const maxSide = 1280;
+    const scale = Math.min(1, maxSide / Math.max(sw, sh));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(sw * scale));
+    c.height = Math.max(1, Math.round(sh * scale));
+    c.getContext('2d').drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, 0, 0, c.width, c.height);
+    return c;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+document.querySelector('#shotReplaceUploader')?.addEventListener('change', async e => {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  if (!file || replacingShotIndex === null || !capturedContext) return;
+  const idx = replacingShotIndex;
+  replacingShotIndex = null;
+  try {
+    const slot = capturedContext.frameLayout?.slots[idx];
+    const ratio = slot ? (slot.width / slot.height) : capturedContext.aspectRatio;
+    const newCanvas = await fileToFittedCanvas(file, ratio);
+    capturedFrames[idx] = newCanvas;
+    capturedGifFrames[idx] = snapshotGifFrame(newCanvas, null);
+    rebuildEditorStrip();
+    renderShotRetakeBar();
+    setGifPhotos([...capturedGifFrames]);
+    showToast(`เปลี่ยนรูปช็อต ${idx + 1} เรียบร้อยแล้ว`, 'success');
+  } catch (err) {
+    showError(err.message);
+  }
+});
+
+document.querySelector('#stripPhotoUploader')?.addEventListener('change', async e => {
+  const files = [...(e.target.files || [])];
+  e.target.value = '';
+  if (!files.length) return;
+  hideError();
+  try {
+    const frameLayout = selectedStripFrame?.layout || null;
+    const maxCount = frameLayout ? frameLayout.slots.length : 4;
+    if (frameLayout && files.length !== maxCount) {
+      throw new Error(`กรอบนี้มี ${maxCount} ช่อง กรุณาเลือกรูปให้ครบ ${maxCount} ภาพ`);
+    }
+    const picked = files.slice(0, maxCount);
+    const [aw, ah] = currentAspectRatio.split(':').map(Number);
+    const baseAspect = aw / ah;
+    const frames = [];
+    const animationFrames = [];
+    for (let i = 0; i < picked.length; i++) {
+      const slot = frameLayout?.slots[i];
+      const ratio = slot ? (slot.width / slot.height) : baseAspect;
+      const canvas = await fileToFittedCanvas(picked[i], ratio);
+      frames.push(canvas);
+      animationFrames.push(snapshotGifFrame(canvas, null));
+    }
+    activeBurstCount = frames.length;
+    const outputLayout = frameLayout || getStripLayout(frames.length, 960, baseAspect, stripOrientation);
+    const decoration = await loadStripDecoration(selectedStripFrame, outputLayout.width, outputLayout.height);
+    const savedFrame = serializeCaptureFrame(selectedStripFrame, decoration, outputLayout);
+
+    activeEditorFilter = 'none';
+    capturedFrames = frames;
+    capturedGifFrames = animationFrames;
+    capturedContext = {
+      frame: selectedStripFrame,
+      decoration,
+      aspectRatio: baseAspect,
+      frameLayout,
+      stripOrientation
+    };
+    setTargetCanvas(canvasElement);
+    getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id, { recordHistory: false }));
+    clearDoodle();
+    resetHistory();
+    rebuildEditorStrip();
+    renderShotRetakeBar();
+    setGifPhotos(animationFrames);
+    lastCaptureSettings = { count: frames.length, orientation: stripOrientation, aspect: currentAspectRatio, frame: savedFrame };
+    renderEditorFilterRow();
+    renderEditorFrameRow();
+    renderEditorBgColorRow();
+    hasChosenStrip = true;
+    switchTab('editor');
+    showToast(`นำเข้า ${frames.length} ภาพจัดเป็น Photo Strip แล้ว!`, 'success');
+  } catch (err) {
+    showError(err.message);
+  }
+});
+
+function openShotPickerDialog(allFrames, pickCount) {
+  const dialog = document.querySelector('#shotPickerDialog');
+  const grid = document.querySelector('#shotPickerGrid');
+  const counter = document.querySelector('#shotPickerCounter');
+  const btnConfirm = document.querySelector('#btnConfirmShotPick');
+  const btnCancel = document.querySelector('#btnCancelShotPick');
+  const chosen = [];
+
+  const renderGrid = () => {
+    counter.textContent = `เลือกแล้ว ${chosen.length} / ${pickCount} รูป (เรียงตามลำดับที่กดเลือก)`;
+    btnConfirm.disabled = chosen.length !== pickCount;
+    grid.replaceChildren(...allFrames.map((frameCanvas, idx) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      const order = chosen.indexOf(idx);
+      btn.className = `shot-pick-item ${order >= 0 ? 'picked' : ''}`;
+      const img = document.createElement('img');
+      img.src = frameCanvas.toDataURL('image/jpeg', 0.7);
+      img.alt = `ช็อต ${idx + 1}`;
+      btn.append(img);
+      if (order >= 0) {
+        const badge = document.createElement('span');
+        badge.className = 'shot-pick-badge';
+        badge.textContent = String(order + 1);
+        btn.append(badge);
+      }
+      btn.addEventListener('click', () => {
+        const pos = chosen.indexOf(idx);
+        if (pos >= 0) chosen.splice(pos, 1);
+        else if (chosen.length < pickCount) chosen.push(idx);
+        renderGrid();
+      });
+      return btn;
+    }));
+  };
+
+  renderGrid();
+  return new Promise(resolve => {
+    const cleanup = result => {
+      btnConfirm.removeEventListener('click', onConfirm);
+      btnCancel.removeEventListener('click', onCancel);
+      dialog.removeEventListener('cancel', onCancel);
+      if (dialog.open) dialog.close();
+      resolve(result);
+    };
+    const onConfirm = () => cleanup([...chosen]);
+    const onCancel = () => cleanup(null);
+    btnConfirm.addEventListener('click', onConfirm);
+    btnCancel.addEventListener('click', onCancel);
+    dialog.addEventListener('cancel', onCancel);
+    dialog.showModal();
+  });
+}
+
+async function recordLiveShotClip(filterOptions, frameCount = 20, intervalMs = 85) {
+  const clip = [];
+  for (let k = 0; k < frameCount; k++) {
+    clip.push(captureSingleFrame(filterOptions));
+    if (k < frameCount - 1) await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  return clip;
+}
+
 async function handleCapture() {
+  // หากอยู่ในโหมดกดถ่ายทีละช็อตและกำลังรอให้กดชัตเตอร์ช็อตถัดไป
+  if (manualShutterResolver) {
+    const next = manualShutterResolver;
+    manualShutterResolver = null;
+    next();
+    return;
+  }
   if (isCapturing || isChangingCamera) return;
   if (!videoElement.videoWidth || videoElement.readyState < 2) {
     showError('กล้องยังไม่พร้อม กรุณาอนุญาตการใช้กล้องและรอภาพปรากฏก่อนถ่าย');
@@ -1871,8 +2832,9 @@ async function handleCapture() {
   const frameLayout = singleRetakeIndex !== null ? capturedContext.frameLayout : (selectedStripFrame?.layout || null);
   const aspect = currentAspectRatio.split(':').map(Number);
   const filterCss = FILTERS_CATALOG[activeFilterIndex].css;
+  // เก็บภาพดิบโดยไม่ฝังฟิลเตอร์สีลงพิกเซล เพื่อให้เปลี่ยนหรือย้อนกลับเป็นสีปกติได้ในหน้าตกแต่ง
   const filterOptions = {
-    filter: `${filterCss === 'none' ? '' : filterCss} brightness(${activeBrightness})`.trim(),
+    filter: activeBrightness !== 1 ? `brightness(${activeBrightness})` : 'none',
     crop: getCaptureCrop()
   };
   let completed = false;
@@ -1883,63 +2845,122 @@ async function handleCapture() {
         previewBox.style.aspectRatio = `${slot.width} / ${slot.height}`;
         filterOptions.crop = getCaptureCrop(slot.width / slot.height);
       }
+      countdownShotBadge.textContent = `ช็อต ${singleRetakeIndex + 1}/${capturedFrames.length}`;
+      countdownShotBadge.classList.remove('hidden');
       countdownOverlay.classList.add('active');
       updateStatus(true, `กำลังถ่ายซ่อมช็อต ${singleRetakeIndex + 1}/${capturedFrames.length}`);
       await new Promise(resolve => startCountdown(activeTimerSeconds, remaining => {
-        countdownNumber.textContent = remaining > 0
-          ? `${remaining}s (📸 ${singleRetakeIndex + 1}/${capturedFrames.length})`
-          : `📸 ${singleRetakeIndex + 1}/${capturedFrames.length}`;
+        if (soundEnabled && remaining > 0) playCountdownBeep(remaining === 1);
+        countdownNumber.textContent = remaining > 0 ? String(remaining) : '📸';
       }, resolve));
+      countdownOverlay.classList.remove('active');
+      triggerScreenFlash();
       const newFrame = captureSingleFrame(filterOptions);
       capturedFrames[singleRetakeIndex] = newFrame;
-      capturedGifFrames[singleRetakeIndex] = snapshotGifFrame(newFrame, frameLayout ? null : capturedContext.decoration);
-      const strip = composePhotoStrip(capturedFrames, capturedContext.decoration, capturedContext.aspectRatio, frameLayout, capturedContext.stripOrientation);
-      setTargetCanvas(canvasElement);
-      setBaseLayerImage(strip);
+      capturedGifFrames[singleRetakeIndex] = snapshotGifFrame(newFrame, null);
+      rebuildEditorStrip();
+      renderShotRetakeBar();
       setGifPhotos([...capturedGifFrames]);
       retakingShotIndex = null;
       completed = true;
     } else {
-      const decoration = await loadStripDecoration();
-      const savedFrame = serializeCaptureFrame(selectedStripFrame, decoration,
-        frameLayout || getStripLayout(count, 960, aspect[0] / aspect[1], stripOrientation));
+      const outputLayout = frameLayout || getStripLayout(count, 960, aspect[0] / aspect[1], stripOrientation);
+      const decoration = await loadStripDecoration(selectedStripFrame, outputLayout.width, outputLayout.height);
+      const savedFrame = serializeCaptureFrame(selectedStripFrame, decoration, outputLayout);
+      const totalToShoot = (!frameLayout && shootPickTotal > count) ? shootPickTotal : count;
       const frames = [];
       const animationFrames = [];
-      for (let i = 1; i <= count; i++) {
+      const liveClips = [];
+      renderCamShotPreview(frames, totalToShoot);
+      for (let i = 1; i <= totalToShoot; i++) {
         if (frameLayout) {
           const slot = frameLayout.slots[i - 1];
           previewBox.style.aspectRatio = `${slot.width} / ${slot.height}`;
           filterOptions.crop = getCaptureCrop(slot.width / slot.height);
         }
+        if (totalToShoot > 1) {
+          countdownShotBadge.textContent = `ช็อต ${i}/${totalToShoot}`;
+          countdownShotBadge.classList.remove('hidden');
+        } else {
+          countdownShotBadge.classList.add('hidden');
+        }
         countdownOverlay.classList.add('active');
-        updateStatus(true, `กำลังถ่ายภาพ ${i}/${count}`);
+        updateStatus(true, `กำลังถ่ายภาพ ${i}/${totalToShoot}`);
         await new Promise(resolve => startCountdown(activeTimerSeconds, remaining => {
-          countdownNumber.textContent = remaining > 0 ? `${remaining}s (📸 ${i}/${count})` : `📸 ${i}/${count}`;
+          if (soundEnabled && remaining > 0) playCountdownBeep(remaining === 1);
+          countdownNumber.textContent = remaining > 0 ? String(remaining) : '📸';
         }, resolve));
-        frames.push(captureSingleFrame(filterOptions));
-        // shortcut: multi-slot custom frames are strip layouts, not single-photo borders; upgrade if per-slot GIF composition is needed
-        animationFrames.push(snapshotGifFrame(frames[frames.length - 1], frameLayout ? null : decoration));
-        if (i < count) await new Promise(resolve => setTimeout(resolve, activeTimerSeconds > 0 ? 500 : 300));
+        countdownOverlay.classList.remove('active');
+        if (liveVideoMode) {
+          updateStatus(true, `🎬 กำลังอัดคลิป Live Strip ช็อต ${i}/${totalToShoot}...`);
+          const clip = await recordLiveShotClip(filterOptions);
+          liveClips.push(clip);
+          triggerScreenFlash();
+          frames.push(clip[clip.length - 1]);
+        } else {
+          triggerScreenFlash();
+          frames.push(captureSingleFrame(filterOptions));
+        }
+        renderCamShotPreview(frames, totalToShoot);
+        // เก็บเฟรม GIF แบบดิบ แล้วค่อยใส่ฟิลเตอร์/กรอบ/สติกเกอร์ตอนสร้าง GIF ให้ตรงกับหน้าตกแต่ง
+        animationFrames.push(snapshotGifFrame(frames[frames.length - 1], null));
+        if (i < totalToShoot) {
+          if (manualShutterMode) {
+            btnCapture.disabled = false;
+            updateStatus(true, `ถ่ายแล้ว ${i}/${totalToShoot} — จัดท่าแล้วกดปุ่มชัตเตอร์สำหรับช็อตที่ ${i + 1}`);
+            await new Promise(resolve => { manualShutterResolver = resolve; });
+            btnCapture.disabled = true;
+          } else {
+            await new Promise(resolve => setTimeout(resolve, burstGapSeconds * 1000));
+          }
+        }
       }
-      const strip = composePhotoStrip(frames, decoration, aspect[0] / aspect[1], frameLayout, stripOrientation);
+
+      let finalFrames = frames;
+      let finalAnimFrames = animationFrames;
+      let finalLiveClips = liveClips;
+      if (totalToShoot > count) {
+        const pickedIndices = await openShotPickerDialog(frames, count);
+        if (!pickedIndices) return;
+        finalFrames = pickedIndices.map(idx => frames[idx]);
+        finalAnimFrames = pickedIndices.map(idx => animationFrames[idx]);
+        if (liveClips.length === frames.length) {
+          finalLiveClips = pickedIndices.map(idx => liveClips[idx]);
+        }
+      }
+
+      activeEditorFilter = filterCss;
+      capturedFrames = finalFrames;
+      capturedGifFrames = finalAnimFrames;
+      setLiveClips(finalLiveClips);
+      capturedContext = {
+        frame: selectedStripFrame,
+        decoration,
+        aspectRatio: aspect[0] / aspect[1],
+        frameLayout,
+        stripOrientation
+      };
       setTargetCanvas(canvasElement);
-      getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id));
-      setBaseLayerImage(strip);
+      getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id, { recordHistory: false }));
+      clearDoodle();
+      resetHistory();
+      rebuildEditorStrip();
       if (activeCaptureTemplate) await loadTemplateDesign(activeCaptureTemplate.design);
-      capturedFrames = frames;
-      capturedGifFrames = animationFrames;
-      capturedContext = { decoration, aspectRatio: aspect[0] / aspect[1], frameLayout, stripOrientation };
       renderShotRetakeBar();
-      setGifPhotos(animationFrames);
+      setGifPhotos(finalAnimFrames);
       lastCaptureSettings = { count, orientation: stripOrientation, aspect: currentAspectRatio, frame: savedFrame };
-      activeEditorFilter = 'none';
       renderEditorFilterRow();
+      renderEditorFrameRow();
+      renderEditorBgColorRow();
       completed = true;
     }
   } catch (err) {
     showError(`เกิดข้อผิดพลาดในการถ่ายภาพ: ${err.message}`);
   } finally {
+    manualShutterResolver = null;
     countdownOverlay.classList.remove('active');
+    countdownShotBadge.classList.add('hidden');
+    document.querySelector('#camShotPreviewStrip')?.classList.add('hidden');
     isCapturing = false;
     controls.forEach((control, index) => { control.disabled = disabledStates[index]; });
   }
@@ -1949,14 +2970,15 @@ async function handleCapture() {
   }
 }
 
-function loadStripDecoration(frame = selectedStripFrame) {
+function loadStripDecoration(frame = selectedStripFrame, width = null, height = null) {
   if (!frame) return Promise.resolve(null);
+  const src = (width && height ? buildBuiltinFrameDataUrl(frame.id, width, height) : null) || frame.src;
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('โหลดกรอบไม่สำเร็จ กรุณาเลือกกรอบใหม่แล้วลองอีกครั้ง'));
-    img.src = frame.src;
+    img.src = src;
   });
 }
 
@@ -1982,6 +3004,15 @@ document.querySelector('#stripShotCount').addEventListener('change', event => {
   activeBurstCount = Number(event.target.value);
   burstBadge.textContent = `${activeBurstCount}x`;
   renderStripSetup();
+});
+
+const customFrameUploadDialog = document.querySelector('#customFrameUploadDialog');
+document.querySelector('#btnOpenCustomFrameUpload')?.addEventListener('click', () => {
+  document.querySelector('#stripUploadStatus').textContent = '';
+  customFrameUploadDialog?.showModal();
+});
+document.querySelector('#btnCloseCustomFrameUpload')?.addEventListener('click', () => {
+  customFrameUploadDialog?.close();
 });
 
 document.querySelector('#stripFrameUpload').addEventListener('change', async event => {
@@ -2060,6 +3091,8 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
     url = null; // Keep the object URL alive while this session uses the frame.
     renderStripSetup();
     status.textContent = `พบ ${layout.slots.length} ช่อง ระบบจะถ่ายและครอปรูปให้พอดีแต่ละช่อง ตรวจตัวอย่างก่อนถ่าย กรอบนี้ใช้ได้จนกว่าจะรีเฟรชหน้าเว็บ`;
+    customFrameUploadDialog?.close();
+    showToast(`เพิ่มกรอบ "${frame.name}" (${layout.slots.length} ช่อง) เรียบร้อยแล้ว`, 'success');
   } catch (error) {
     status.textContent = error.message;
   } finally {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { encodePhotoGif, snapshotGifFrame, readGifFrames } from './photoGif.js';
+import { encodePhotoGif, snapshotGifFrame, readGifFrames, buildGifSequence } from './photoGif.js';
 
 test('snapshotGifFrame and readGifFrames overlay the selected frame onto each GIF frame', () => {
   const calls = [];
@@ -103,4 +103,56 @@ test('readGifFrames composites scaled stickers onto each GIF frame', () => {
   } finally {
     delete globalThis.document;
   }
+});
+
+test('readGifFrames applies editor filter only to photos and honors sticker scale', () => {
+  const draws = [];
+  const ctx = {
+    filter: 'none',
+    fillRect() {},
+    save() {},
+    restore() { this.filter = 'none'; },
+    translate() {},
+    rotate() {},
+    drawImage(img, x, y, w, h) { draws.push({ img, w, h, filter: this.filter }); },
+    getImageData: (x, y, width, height) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) })
+  };
+  globalThis.document = { createElement: () => ({ getContext: () => ctx }) };
+  try {
+    const sticker = { image: 'heart-img', x: 320, y: 240, width: 100, height: 80, scale: 2, rotation: 0, opacity: 1 };
+    const photoA = { width: 320, height: 240 };
+    const photoB = { width: 320, height: 240 };
+    readGifFrames(
+      [photoA, photoB],
+      'frame-img',
+      [sticker],
+      { width: 640, height: 480 },
+      { filter: 'sepia(0.5)' }
+    );
+    // For each frame: photo (with filter), frame (no filter), sticker (scaled by s=0.5 and layer.scale=2 -> 100x80, no filter)
+    assert.deepEqual(draws.slice(0, 3), [
+      { img: photoA, w: 320, h: 240, filter: 'sepia(0.5)' },
+      { img: 'frame-img', w: 320, h: 240, filter: 'none' },
+      { img: 'heart-img', w: 100, h: 80, filter: 'none' }
+    ]);
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test('buildGifSequence and encodePhotoGif support Boomerang sequence and custom delay', async () => {
+  assert.deepEqual(buildGifSequence([1, 2, 3, 4], false), [1, 2, 3, 4]);
+  assert.deepEqual(buildGifSequence([1, 2, 3, 4], true), [1, 2, 3, 4, 3, 2]);
+  assert.deepEqual(buildGifSequence([1, 2], true), [1, 2]);
+
+  const frame = c => ({ width: 2, height: 2, data: new Uint8ClampedArray(Array(4).fill([...c, 255]).flat()) });
+  const steps = [];
+  const blob = await encodePhotoGif(
+    [frame([255, 0, 0]), frame([0, 255, 0]), frame([0, 0, 255])],
+    (cur, total) => steps.push([cur, total]),
+    { delay: 220, boomerang: true }
+  );
+  assert.equal(blob.type, 'image/gif');
+  // 3 frames in boomerang mode -> 1, 2, 3, 2 = 4 frames total
+  assert.deepEqual(steps, [[1, 4], [2, 4], [3, 4], [4, 4]]);
 });

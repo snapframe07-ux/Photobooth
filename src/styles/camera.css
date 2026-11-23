@@ -474,3 +474,86 @@
   transition: background 0.2s;
 }
 
+/* Flash Overlay */
+.cam-flash-overlay {
+  position: absolute;
+  inset: 0;
+  background: #ffffff;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 12;
+  transition: opacity 0.22s ease-out;
+}
+
+.cam-flash-overlay.flash {
+  opacity: 0.95;
+  transition: none;
+}
+
+/* Screen Ring Light Glow */
+.cam-studio-card.ring-light-white {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 18px rgba(255, 255, 255, 0.92), 0 0 60px 26px rgba(255, 255, 255, 0.85);
+}
+
+.cam-studio-card.ring-light-warm {
+  border-color: #fef08a;
+  box-shadow: 0 0 0 18px rgba(254, 240, 138, 0.92), 0 0 60px 26px rgba(253, 224, 71, 0.78);
+}
+
+.cam-studio-card.ring-light-pink {
+  border-color: #fbcfe8;
+  box-shadow: 0 0 0 18px rgba(251, 207, 232, 0.92), 0 0 60px 26px rgba(244, 114, 182, 0.72);
+}
+
+.cam-gap-select {
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.35rem 0.65rem;
+  min-height: 36px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+/* Live Shot Preview Strip during multi-shot capture */
+.cam-shot-preview-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  width: 100%;
+  max-width: 640px;
+  flex-wrap: wrap;
+}
+
+.cam-shot-thumb {
+  width: 64px;
+  height: 48px;
+  border-radius: var(--r-sm);
+  border: 2px solid var(--border-strong);
+  background: var(--surface-sunken);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.cam-shot-thumb.captured {
+  border-color: var(--accent);
+}
+
+.cam-shot-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
