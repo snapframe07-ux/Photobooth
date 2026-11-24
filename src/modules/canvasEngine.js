@@ -7,7 +7,7 @@ import { serializeLayerSource } from './templateAssets.js';
  * - Template Design JSON Serialization & Deserialization
  */
 
-import { applyPixelFilter, filteredSource } from './imageFilters.js';
+import { filteredSource } from './imageFilters.js';
 
 let targetCanvas = null;
 let ctx = null;
@@ -43,6 +43,8 @@ const drawState = {
 const MAX_HISTORY = 30;
 let undoStack = [];
 let redoStack = [];
+let pendingUndoSnapshot = false;
+let cachedDoodleSnapshot = null;
 
 function ensureDoodleCanvas(w, h) {
   if (!doodleCanvas) {
@@ -62,6 +64,7 @@ function ensureDoodleCanvas(w, h) {
   doodleCtx = doodleCanvas.getContext('2d');
   if (hasDoodleContent) {
     doodleCtx.drawImage(prev, 0, 0, w, h);
+    cachedDoodleSnapshot = null;
   }
 }
 
@@ -75,9 +78,12 @@ function cloneDoodleSnapshot() {
 }
 
 function captureSnapshot() {
+  if (hasDoodleContent && !cachedDoodleSnapshot) {
+    cachedDoodleSnapshot = cloneDoodleSnapshot();
+  }
   return {
     layers: layers.filter(l => l.type !== 'base').map(l => ({ ...l })),
-    doodle: cloneDoodleSnapshot(),
+    doodle: hasDoodleContent ? cachedDoodleSnapshot : null,
     hasDoodleContent
   };
 }
@@ -95,6 +101,7 @@ function restoreSnapshot(snap) {
       doodleCtx.drawImage(snap.doodle, 0, 0, doodleCanvas.width, doodleCanvas.height);
     }
     hasDoodleContent = Boolean(snap.hasDoodleContent && snap.doodle);
+    cachedDoodleSnapshot = hasDoodleContent ? snap.doodle : null;
   }
   if (typeof onSelectionChangeCallback === 'function') onSelectionChangeCallback(selectedLayerId);
   notifyHistoryChange();
@@ -166,11 +173,12 @@ export function isDrawMode() {
   return drawState.active;
 }
 
-export function clearDoodle() {
+export function clearDoodle({ recordHistory = true } = {}) {
   if (!doodleCanvas || !doodleCtx || !hasDoodleContent) return;
-  pushUndoSnapshot();
+  if (recordHistory) pushUndoSnapshot();
   doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height);
   hasDoodleContent = false;
+  cachedDoodleSnapshot = null;
   scheduleRender();
 }
 
@@ -350,73 +358,6 @@ export function loadImage(src) {
     img.onerror = () => reject(new Error(`ไม่สามารถโหลดรูปภาพจาก URL: ${src}`));
     img.src = src;
   });
-}
-
-/**
- * Captures a snapshot from <video> into Layer 1 (Base Layer).
- */
-export async function captureFrame(videoEl, options = {}) {
-  if (!videoEl || !(videoEl instanceof HTMLVideoElement)) {
-    throw new Error('กรุณาระบุ <video> element ที่มี video stream สำหรับถ่ายภาพ');
-  }
-
-  const vw = videoEl.videoWidth || targetCanvas?.width || 1280;
-  const vh = videoEl.videoHeight || targetCanvas?.height || 720;
-
-  // options.crop = พื้นที่ของวิดีโอที่มองเห็นจริงบนพรีวิว (อัตราส่วน + ซูม)
-  // ถ้าไม่ส่งมาให้เก็บเฟรมเต็มเหมือนเดิม
-  const crop = options.crop || { sx: 0, sy: 0, sw: vw, sh: vh };
-  const width = Math.max(1, Math.round(crop.sw));
-  const height = Math.max(1, Math.round(crop.sh));
-
-  resizeCanvas(width, height);
-
-  const offscreen = document.createElement('canvas');
-  offscreen.width = width;
-  offscreen.height = height;
-  const offCtx = offscreen.getContext('2d');
-
-  const isMirrored = options.mirror !== undefined ? options.mirror : videoEl.classList.contains('mirror');
-
-  if (isMirrored) {
-    offCtx.translate(width, 0);
-    offCtx.scale(-1, 1);
-  }
-
-  const nativeFilter = 'filter' in offCtx;
-  if (nativeFilter && options.filter && options.filter !== 'none') {
-    offCtx.filter = options.filter;
-  }
-
-  offCtx.drawImage(videoEl, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height);
-  if (!nativeFilter) applyPixelFilter(offscreen, options.filter);
-
-  const baseLayer = {
-    id: 'base-layer',
-    type: 'base',
-    src: null,
-    image: offscreen,
-    x: width / 2,
-    y: height / 2,
-    width: width,
-    height: height,
-    rotation: 0,
-    scale: 1,
-    scaleX: 1,
-    scaleY: 1,
-    opacity: 1,
-    mirror: false
-  };
-
-  const baseIndex = layers.findIndex(l => l.type === 'base');
-  if (baseIndex >= 0) {
-    layers[baseIndex] = baseLayer;
-  } else {
-    layers.unshift(baseLayer);
-  }
-
-  scheduleRender();
-  return baseLayer;
 }
 
 /**
@@ -737,6 +678,7 @@ function drawDoodleSegment(from, to) {
   doodleCtx.stroke();
   doodleCtx.restore();
   hasDoodleContent = true;
+  cachedDoodleSnapshot = null;
 }
 
 function getPinchMetrics() {
@@ -769,7 +711,7 @@ function handlePointerDown(e) {
     const selLayer = layers.find(l => l.id === selectedLayerId);
     const metrics = getPinchMetrics();
     if (selLayer && selLayer.type !== 'base' && metrics) {
-      if (!activeAction) pushUndoSnapshot();
+      if (!activeAction) pendingUndoSnapshot = true;
       activeAction = 'pinch';
       pinchState = {
         initialDist: metrics.dist,
@@ -792,7 +734,7 @@ function handlePointerDown(e) {
           removeLayer(selLayer.id);
           return;
         }
-        pushUndoSnapshot();
+        pendingUndoSnapshot = true;
         activeAction = handleHit;
         dragStart = coords;
         layerInitialState = { ...selLayer };
@@ -820,7 +762,7 @@ function handlePointerDown(e) {
 
   if (hitLayer) {
     selectLayer(hitLayer.id);
-    pushUndoSnapshot();
+    pendingUndoSnapshot = true;
     activeAction = 'drag';
     dragStart = coords;
     layerInitialState = { ...hitLayer };
@@ -847,6 +789,10 @@ function handlePointerMove(e) {
     const layer = layers.find(l => l.id === selectedLayerId);
     const metrics = getPinchMetrics();
     if (layer && metrics) {
+      if (pendingUndoSnapshot) {
+        pushUndoSnapshot();
+        pendingUndoSnapshot = false;
+      }
       const scaleFactor = metrics.dist / pinchState.initialDist;
       layer.scale = Math.max(0.2, Math.min(4, Number((pinchState.initialScale * scaleFactor).toFixed(2))));
       const deltaDeg = ((metrics.angle - pinchState.initialAngle) * 180) / Math.PI;
@@ -864,14 +810,27 @@ function handlePointerMove(e) {
   if (activeAction === 'drag') {
     const dx = coords.x - dragStart.x;
     const dy = coords.y - dragStart.y;
+    if (dx === 0 && dy === 0) return;
+    if (pendingUndoSnapshot) {
+      pushUndoSnapshot();
+      pendingUndoSnapshot = false;
+    }
     layer.x = layerInitialState.x + dx;
     layer.y = layerInitialState.y + dy;
   } else if (activeAction === 'rotate') {
+    if (pendingUndoSnapshot) {
+      pushUndoSnapshot();
+      pendingUndoSnapshot = false;
+    }
     const angleRad = Math.atan2(coords.y - layer.y, coords.x - layer.x);
     let angleDeg = (angleRad * 180) / Math.PI + 90;
     if (angleDeg < 0) angleDeg += 360;
     layer.rotation = Math.round(angleDeg % 360);
   } else if (activeAction === 'scale') {
+    if (pendingUndoSnapshot) {
+      pushUndoSnapshot();
+      pendingUndoSnapshot = false;
+    }
     const dist = Math.hypot(coords.x - layer.x, coords.y - layer.y);
     const initialDist = Math.hypot(layer.width / 2, layer.height / 2);
     const newScale = Number((dist / initialDist).toFixed(2));
@@ -884,6 +843,7 @@ function handlePointerMove(e) {
 function handlePointerUp(e) {
   activePointers.delete(e.pointerId);
   if (activeAction === 'pinch' && activePointers.size >= 2) return;
+  pendingUndoSnapshot = false;
   if (activeAction) {
     activeAction = null;
     layerInitialState = null;
@@ -1135,7 +1095,8 @@ export async function downloadImage(filename = 'snapframe-photo.png', format = '
 export async function downloadDataUrl(dataUrl, filename = 'snapframe-photo.png', format = 'image/png') {
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  if (ios) {
+  const isVideo = typeof format === 'string' && format.startsWith('video/');
+  if (ios && !isVideo) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.setAttribute('role', 'dialog');
@@ -1171,13 +1132,4 @@ export async function downloadDataUrl(dataUrl, filename = 'snapframe-photo.png',
  */
 export function getLayers() {
   return layers;
-}
-
-/**
- * Clears all layers.
- */
-export function clearCanvas() {
-  layers = [];
-  selectedLayerId = null;
-  scheduleRender();
 }

@@ -106,3 +106,19 @@ test('manual openings preserve artwork and may touch frame edges', () => {
   assert.equal(getFrameLayout(meme, { allowEdgeSlots: true }).slots.length, 1);
   assert.throws(() => clearFrameRectangle(meme, { x: -1, y: 0 }, { x: 3, y: 4 }));
 });
+
+test('clearSelectedFrameSlots uses exact pixel mask when available to preserve tilted borders', () => {
+  const frame = makeFrame(20, 20);
+  // Diagonal / tilted opening inside bounding box (2..10, 2..10)
+  const pixels = [];
+  for (let y = 4; y <= 8; y++) {
+    for (let x = 4; x <= 8; x++) {
+      if (x + y >= 10 && x + y <= 14) pixels.push(y * 20 + x);
+    }
+  }
+  const pixelSet = new Set(pixels);
+  clearSelectedFrameSlots(frame, [{ minX: 2, minY: 2, maxX: 10, maxY: 10, pixels, selected: true }]);
+  for (let i = 0; i < 20 * 20; i++) {
+    assert.equal(frame.data[i * 4 + 3], pixelSet.has(i) ? 0 : 255);
+  }
+});

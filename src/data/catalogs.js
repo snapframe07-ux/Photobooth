@@ -1,17 +1,4 @@
-// Assets: 11 Frames
-import frameVintageGold from '../assets/frames/vintage-gold.svg';
-import frameVintage from '../assets/frames/vintage-frame.svg';
-import frameNeonCyber from '../assets/frames/neon-cyber.svg';
-import frameFloralBloom from '../assets/frames/floral-bloom.svg';
-import frameRetroFilm from '../assets/frames/retro-film.svg';
-import frameCutePastel from '../assets/frames/cute-pastel.svg';
-import frameBirthdayParty from '../assets/frames/birthday-party.svg';
-import frameMinimalistBlack from '../assets/frames/minimalist-black.svg';
-import frameComicPop from '../assets/frames/comic-pop.svg';
-import frameLoveRomance from '../assets/frames/love-romance.svg';
-import frameFestiveSparkle from '../assets/frames/festive-sparkle.svg';
-import frameY2kChrome from '../assets/frames/y2k-chrome.svg';
-import framePolaroidCream from '../assets/frames/polaroid-cream.svg';
+import { buildBuiltinFrameDataUrl } from '../modules/builtinFrames.js';
 
 // Assets: 10 Stickers
 import stickerStar from '../assets/stickers/star.svg';
@@ -25,20 +12,22 @@ import stickerSpeechBubble from '../assets/stickers/speech-bubble.svg';
 import stickerPartyHat from '../assets/stickers/party-hat.svg';
 import stickerRibbonBow from '../assets/stickers/ribbon-bow.svg';
 
+const builtinFrame = (id, name) => ({ id, name, src: buildBuiltinFrameDataUrl(id, 1280, 720) });
+
 export const FRAMES_CATALOG = [
-  { id: 'vintage-gold', name: 'Vintage Gold', src: frameVintageGold },
-  { id: 'vintage-classic', name: 'Vintage Classic', src: frameVintage },
-  { id: 'neon-cyber', name: 'Neon Cyberpunk', src: frameNeonCyber },
-  { id: 'floral-bloom', name: 'Floral Bloom', src: frameFloralBloom },
-  { id: 'retro-film', name: 'Retro 35mm Film', src: frameRetroFilm },
-  { id: 'cute-pastel', name: 'Cute Pastel', src: frameCutePastel },
-  { id: 'birthday-party', name: 'Party Festival', src: frameBirthdayParty },
-  { id: 'minimalist-black', name: 'Minimalist Black', src: frameMinimalistBlack },
-  { id: 'comic-pop', name: 'Comic Pop Art', src: frameComicPop },
-  { id: 'love-romance', name: 'Love & Romance', src: frameLoveRomance },
-  { id: 'festive-sparkle', name: 'Festive Sparkle', src: frameFestiveSparkle },
-  { id: 'y2k-chrome', name: 'Y2K Chrome', src: frameY2kChrome },
-  { id: 'polaroid-cream', name: 'Polaroid Cream', src: framePolaroidCream }
+  builtinFrame('vintage-gold', 'Vintage Gold'),
+  builtinFrame('vintage-classic', 'Vintage Classic'),
+  builtinFrame('neon-cyber', 'Neon Cyberpunk'),
+  builtinFrame('floral-bloom', 'Floral Bloom'),
+  builtinFrame('retro-film', 'Retro 35mm Film'),
+  builtinFrame('cute-pastel', 'Cute Pastel'),
+  builtinFrame('birthday-party', 'Party Festival'),
+  builtinFrame('minimalist-black', 'Minimalist Black'),
+  builtinFrame('comic-pop', 'Comic Pop Art'),
+  builtinFrame('love-romance', 'Love & Romance'),
+  builtinFrame('festive-sparkle', 'Festive Sparkle'),
+  builtinFrame('y2k-chrome', 'Y2K Chrome'),
+  builtinFrame('polaroid-cream', 'Polaroid Cream')
 ];
 
 const svgSticker = body =>

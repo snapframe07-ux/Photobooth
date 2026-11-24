@@ -156,3 +156,51 @@ test('buildGifSequence and encodePhotoGif support Boomerang sequence and custom 
   // 3 frames in boomerang mode -> 1, 2, 3, 2 = 4 frames total
   assert.deepEqual(steps, [[1, 4], [2, 4], [3, 4], [4, 4]]);
 });
+
+test('readGifFrames maps stickers to each slot accurately and hides stickers from other slots', () => {
+  const frameDraws = [];
+  let currentFrame = null;
+  let lastTranslate = null;
+  const ctx = {
+    fillRect() {},
+    save() {},
+    restore() {},
+    translate(x, y) { lastTranslate = [x, y]; },
+    rotate() {},
+    drawImage(img, _x, _y, w, h) {
+      if (img === 'cherry' || img === 'bow') {
+        currentFrame.push({ img, pos: lastTranslate, w, h });
+      }
+    },
+    getImageData: (_x, _y, width, height) => {
+      frameDraws.push(currentFrame);
+      currentFrame = [];
+      return { width, height, data: new Uint8ClampedArray(width * height * 4) };
+    }
+  };
+  currentFrame = [];
+  globalThis.document = { createElement: () => ({ getContext: () => ctx }) };
+  try {
+    const slots = [
+      { x: 300, y: 200, width: 400, height: 300 }, // Slot 0 (top-right)
+      { x: 400, y: 700, width: 400, height: 300 }  // Slot 1 (bottom-right)
+    ];
+    const stickers = [
+      { image: 'cherry', x: 500, y: 350, width: 80, height: 80, rotation: 0, scale: 1 }, // center of Slot 0
+      { image: 'bow', x: 600, y: 775, width: 80, height: 80, rotation: 0, scale: 1 }     // top-center of Slot 1
+    ];
+    readGifFrames(
+      [{ width: 400, height: 300 }, { width: 400, height: 300 }],
+      null,
+      stickers,
+      { width: 960, height: 1200 },
+      { slots }
+    );
+    assert.deepEqual(frameDraws, [
+      [{ img: 'cherry', pos: [200, 150], w: 80, h: 80 }],
+      [{ img: 'bow', pos: [200, 75], w: 80, h: 80 }]
+    ]);
+  } finally {
+    delete globalThis.document;
+  }
+});

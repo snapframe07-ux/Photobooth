@@ -49,10 +49,18 @@ export function getFrameLayout(imageData, options) {
   };
 }
 
-// Two taps work with both mouse and touch, without requiring a drag gesture.
+// Clears selected openings: uses exact detected pixel mask when available (preserves tilted borders/artwork),
+// or falls back to the bounding rectangle when manually adjusted.
 export function clearSelectedFrameSlots(imageData, candidates) {
+  const maxIdx = imageData.width * imageData.height;
   for (const slot of candidates.filter(slot => slot.selected)) {
-    clearFrameRectangle(imageData, { x: slot.minX, y: slot.minY }, { x: slot.maxX, y: slot.maxY });
+    if (Array.isArray(slot.pixels) && slot.pixels.length > 0) {
+      for (const p of slot.pixels) {
+        if (p >= 0 && p < maxIdx) imageData.data[p * 4 + 3] = 0;
+      }
+    } else {
+      clearFrameRectangle(imageData, { x: slot.minX, y: slot.minY }, { x: slot.maxX, y: slot.maxY });
+    }
   }
 }
 

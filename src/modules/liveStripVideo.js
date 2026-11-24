@@ -1,7 +1,7 @@
 // Live Strip / Video Photobooth encoder (Life4Cuts-style animated photo strip).
 // Combines per-shot short frame clips into a single strip video (MP4/WebM) with all editor decorations.
 
-import { composePhotoStrip } from './photoStrip.js';
+import { composePhotoStrip, drawScaledLayers } from './photoStrip.js';
 
 export function pickSupportedVideoMimeType() {
   if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
@@ -68,37 +68,36 @@ export async function exportLiveStripVideo(shotClips, config, onProgress = () =>
   const maxClipLen = Math.max(...shotClips.map(c => c.length));
   const totalSteps = maxClipLen * loops;
   const stepMs = Math.round(1000 / fps);
+  const cachedFrames = new Array(maxClipLen);
 
   recorder.start();
   try {
     for (let step = 0; step < totalSteps; step++) {
       const idx = step % maxClipLen;
-      const frameSet = shotClips.map(clip => clip[Math.min(idx, clip.length - 1)]);
-      const composed = composePhotoStrip(frameSet, decoration, aspectRatio, frameLayout, stripOrientation, stripOptions);
       ctx.clearRect(0, 0, outW, outH);
-      ctx.drawImage(composed, 0, 0, outW, outH);
-
-      if (stickers.length && sourceSize?.width > 0 && sourceSize?.height > 0) {
-        const s = Math.min(outW / sourceSize.width, outH / sourceSize.height);
-        for (const layer of stickers) {
-          if (!layer.image) continue;
-          ctx.save();
-          ctx.globalAlpha = layer.opacity ?? 1;
-          ctx.translate((layer.x / sourceSize.width) * outW, (layer.y / sourceSize.height) * outH);
-          ctx.rotate(((layer.rotation || 0) * Math.PI) / 180);
-          const dw = layer.width * s * (layer.scaleX || 1) * (layer.scale || 1);
-          const dh = layer.height * s * (layer.scaleY || 1) * (layer.scale || 1);
-          ctx.drawImage(layer.image, -dw / 2, -dh / 2, dw, dh);
-          ctx.restore();
+      if (cachedFrames[idx]) {
+        ctx.drawImage(cachedFrames[idx], 0, 0);
+      } else {
+        const frameSet = shotClips.map(clip => clip[Math.min(idx, clip.length - 1)]);
+        const composed = composePhotoStrip(frameSet, decoration, aspectRatio, frameLayout, stripOrientation, stripOptions);
+        ctx.drawImage(composed, 0, 0, outW, outH);
+        drawScaledLayers(ctx, stickers, sourceSize, outW, outH);
+        if (doodle) ctx.drawImage(doodle, 0, 0, outW, outH);
+        if (loops > 1) {
+          const snap = document.createElement('canvas');
+          snap.width = outW;
+          snap.height = outH;
+          snap.getContext('2d').drawImage(outCanvas, 0, 0);
+          cachedFrames[idx] = snap;
         }
       }
-      if (doodle) ctx.drawImage(doodle, 0, 0, outW, outH);
 
       onProgress(step + 1, totalSteps);
       await new Promise(resolve => setTimeout(resolve, stepMs));
     }
   } finally {
     if (recorder.state !== 'inactive') recorder.stop();
+    stream.getTracks?.().forEach(track => track.stop?.());
   }
 
   const blob = await stopped;

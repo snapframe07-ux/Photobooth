@@ -144,3 +144,20 @@ export function composePhotoStrip(frames, decoration, aspect = 4 / 3, frameLayou
   if (decoration) ctx.drawImage(decoration, 0, 0, canvas.width, canvas.height);
   return canvas;
 }
+
+export function drawScaledLayers(ctx, layers, sourceSize, targetW, targetH) {
+  if (!layers?.length || !sourceSize?.width || !sourceSize?.height) return;
+  const s = Math.min(targetW / sourceSize.width, targetH / sourceSize.height);
+  for (const layer of layers) {
+    if (!layer?.image) continue;
+    ctx.save();
+    ctx.globalAlpha = layer.opacity ?? 1;
+    ctx.translate((layer.x / sourceSize.width) * targetW, (layer.y / sourceSize.height) * targetH);
+    ctx.rotate(((layer.rotation || 0) * Math.PI) / 180);
+    if (layer.mirror && typeof ctx.scale === 'function') ctx.scale(-1, 1);
+    const dw = layer.width * s * (layer.scaleX || 1) * (layer.scale || 1);
+    const dh = layer.height * s * (layer.scaleY || 1) * (layer.scale || 1);
+    ctx.drawImage(layer.image, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
+  }
+}

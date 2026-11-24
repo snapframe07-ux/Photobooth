@@ -105,35 +105,13 @@
 .cam-header-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .shot-retake-bar {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-  margin-bottom: 12px;
-  padding: 10px 12px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
   font-size: 0.9rem;
 }
 .shot-retake-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 .cutout-advanced { margin: 10px 0; font-size: 0.9rem; }
 .cutout-advanced summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
-#viewCamera.cam-clean-mode .cam-left-panel,
-#viewCamera.cam-clean-mode .cam-right-panel,
-#viewCamera.cam-clean-mode .aspect-ratio-group,
-#viewCamera.cam-clean-mode .filter-group,
-#viewCamera.cam-clean-mode .timer-group,
-#viewCamera.cam-clean-mode .brightness-group,
-#viewCamera.cam-clean-mode .zoom-ruler-bar,
-#viewCamera.cam-clean-mode .cam-toolbar .btn-tool-icon {
-  display: none;
-}
-#viewCamera.cam-clean-mode .cam-workspace {
-  grid-template-columns: 1fr;
-}
-#viewCamera.cam-clean-mode .cam-toolbar {
-  justify-content: center;
-}
 
 @media (min-width: 681px) and (max-width: 899px) {
   .strip-setup { grid-template-columns: minmax(0, 1fr) 220px; padding: 24px; gap: 20px; }

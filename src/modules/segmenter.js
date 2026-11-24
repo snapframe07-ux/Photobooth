@@ -549,7 +549,11 @@ export async function cutoutFrameSlots(imageFile, options = {}) {
 
   if (options.detectOnly) {
     return { candidates: slots.map(({ region }) => ({
-      minX: region.minX, minY: region.minY, maxX: region.maxX, maxY: region.maxY
+      minX: region.minX,
+      minY: region.minY,
+      maxX: region.maxX,
+      maxY: region.maxY,
+      pixels: region.pixels
     })).sort((a, b) => a.minY - b.minY || a.minX - b.minX) };
   }
 

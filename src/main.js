@@ -4,11 +4,12 @@ import { FRAMES_CATALOG, STICKERS_CATALOG, STICKER_CATEGORIES, FILTERS_CATALOG }
 import { renderAppLayout } from './ui/appLayout.js';
 import { bindCatalogDeleteButtons, loadSavedCatalog } from './ui/assetGallery.js';
 import './style.css';
-import { composePhotoStrip, getStripLayout } from './modules/photoStrip.js';
+import { composePhotoStrip, getStripLayout, drawScaledLayers } from './modules/photoStrip.js';
 import { buildBuiltinFrameDataUrl, isBuiltinFrame } from './modules/builtinFrames.js';
 import { serializeCaptureFrame, restoreCaptureFrame, renderFrameToBlob } from './modules/templateFrame.js';
 import { getFrameLayout, clearFrameRectangle, clearSelectedFrameSlots } from './modules/frameSlots.js';
 import { applyPixelFilter } from './modules/imageFilters.js';
+import { loadImageFromBlob } from './modules/imageLoader.js';
 import { playCountdownBeep, playShutterSound } from './modules/soundEffects.js';
 import { composeStoryCanvas } from './modules/storyExport.js';
 import { exportLiveStripVideo } from './modules/liveStripVideo.js';
@@ -34,6 +35,7 @@ import {
   setOnSelectionChange,
   setOnCanvasResize,
   setTargetCanvas,
+  loadImage,
   serializeDesignData,
   loadTemplateDesign,
   downloadImage,
@@ -71,7 +73,20 @@ let activeStripBgColor = '#FFF5F7'; // สีพื้นหลังของ P
 let activeStripBgPattern = 'solid'; // ลายพื้นหลังของ Photo Strip
 let activeStripFooterText = 'SnapFrame';
 let activeStripShowDate = false;
-let activeStripFooterFont = 'sans-serif';
+let activeStripFooterFont = "'IBM Plex Sans Thai', sans-serif";
+
+async function ensureFontLoaded(fontFamily, size = 54) {
+  if (!fontFamily || typeof document === 'undefined' || !document.fonts?.load) return;
+  try {
+    await Promise.race([
+      Promise.all([
+        document.fonts.load(`700 ${size}px ${fontFamily}`),
+        document.fonts.load(`800 ${size}px ${fontFamily}`)
+      ]),
+      new Promise(resolve => setTimeout(resolve, 1500))
+    ]);
+  } catch (_) {}
+}
 
 const STRIP_BG_PRESETS = [
   { color: '#FFF5F7', name: 'ชมพูอ่อน' },
@@ -132,10 +147,33 @@ let retakingShotIndex = null;
 let shootPickTotal = 0; // 0 = ปกติ, 6 = ถ่าย 6 เลือก 4, 8 = ถ่าย 8 เลือก 4
 let liveVideoMode = false;
 
+let liveVideoPreviewState = null;
+
+function clearLiveVideoPreview() {
+  const player = document.querySelector('#liveVideoPreviewPlayer');
+  if (player) {
+    player.pause?.();
+    player.removeAttribute('src');
+    player.load?.();
+  }
+  const downloadBtn = document.querySelector('#btnDownloadLiveVideo');
+  if (downloadBtn) downloadBtn.disabled = true;
+  if (liveVideoPreviewState?.url) {
+    URL.revokeObjectURL(liveVideoPreviewState.url);
+  }
+  liveVideoPreviewState = null;
+}
+
 function setLiveClips(clips) {
   capturedLiveClips = clips || [];
   const btn = document.querySelector('#btnExportLiveVideo');
-  if (btn) btn.disabled = capturedLiveClips.length === 0;
+  if (btn) {
+    btn.disabled = capturedLiveClips.length === 0;
+    btn.classList.toggle('hidden', capturedLiveClips.length === 0);
+  }
+  const dialog = document.querySelector('#liveVideoPreviewDialog');
+  if (dialog?.open) dialog.close();
+  clearLiveVideoPreview();
 }
 
 function setGifPhotos(photos) {
@@ -194,15 +232,11 @@ const btnSaveTemplate = document.querySelector('#btnSaveTemplate');
 // Camera Studio DOM Elements
 const previewBox = document.querySelector('#previewBox');
 const btnAspectActive = document.querySelector('#btnAspectActive');
-const btnAspectArrow = document.querySelector('#btnAspectArrow');
-
-const filterCarouselTrack = document.querySelector('#filterCarouselTrack');
-const btnFilterUp = document.querySelector('#btnFilterUp');
-const btnFilterDown = document.querySelector('#btnFilterDown');
+const camFilterStrip = document.querySelector('#camFilterStrip');
+const camSettingsDialog = document.querySelector('#camSettingsDialog');
+const exportDialog = document.querySelector('#exportDialog');
 
 const btnTimerActive = document.querySelector('#btnTimerActive');
-const btnTimerArrow = document.querySelector('#btnTimerArrow');
-
 const brightnessSlider = document.querySelector('#brightnessSlider');
 const zoomSlider = document.querySelector('#zoomSlider');
 
@@ -212,19 +246,13 @@ const btnToolGrid = document.querySelector('#btnToolGrid');
 const btnToolBurst = document.querySelector('#btnToolBurst');
 const burstBadge = document.querySelector('#burstBadge');
 
-const tabStickers = document.querySelector('#tabStickers');
-const tabText = document.querySelector('#tabText');
-const tabDraw = document.querySelector('#tabDraw');
-const tabUpload = document.querySelector('#tabUpload');
 const stickerTabCount = document.querySelector('#stickerTabCount');
-
-const stickerPanel = document.querySelector('#stickerPanel');
+const layerTabCount = document.querySelector('#layerTabCount');
 const stickerSearchInput = document.querySelector('#stickerSearchInput');
 const stickerCategoryBar = document.querySelector('#stickerCategoryBar');
 const galleryStickers = document.querySelector('#galleryStickers');
-const galleryText = document.querySelector('#galleryText');
-const galleryDraw = document.querySelector('#galleryDraw');
-const galleryUpload = document.querySelector('#galleryUpload');
+
+let activeEditorTool = 'filter';
 
 const stickerUploader = document.querySelector('#stickerUploader');
 const chkRemoveBg = document.querySelector('#chkRemoveBg');
@@ -428,17 +456,17 @@ updateStatus(false, 'เลือกกรอบก่อนเริ่มถ�
 
 // Init Auth listener
 if (isSupabaseConfigured) {
-  supabaseService.getCurrentUser().then(user => {
+  let loadedStickersUserKey = null;
+  const syncAuthAndStickers = user => {
     updateUserAuthUI(user);
-    loadSavedStickersFromSupabase();
-    loadSavedFramesFromSupabase();
-  });
-
-  supabaseService.onAuthStateChange((user) => {
-    updateUserAuthUI(user);
-    loadSavedStickersFromSupabase();
-    loadSavedFramesFromSupabase();
-  });
+    const key = user?.id || 'guest';
+    if (loadedStickersUserKey !== key) {
+      loadedStickersUserKey = key;
+      loadSavedStickersFromSupabase();
+    }
+  };
+  supabaseService.getCurrentUser().then(syncAuthAndStickers);
+  supabaseService.onAuthStateChange(syncAuthAndStickers);
 }
 
 function updateUserAuthUI(user) {
@@ -671,8 +699,13 @@ function renderEditorFrameRow() {
 function renderEditorBgColorRow() {
   if (!editorBgColorRow || !editorBgBox) return;
   const canChangeBg = capturedFrames.length > 0 && capturedContext && !capturedContext.frameLayout;
+  const tabBg = document.querySelector('#toolTabBg');
+  tabBg?.classList.toggle('hidden', !canChangeBg);
   editorBgBox.classList.toggle('hidden', !canChangeBg);
-  if (!canChangeBg) return;
+  if (!canChangeBg) {
+    if (activeEditorTool === 'bg') switchEditorTool('filter');
+    return;
+  }
 
   editorBgColorRow.innerHTML = `
     ${STRIP_BG_PRESETS.map(p => `
@@ -724,27 +757,17 @@ document.querySelector('#stripFooterTextInput')?.addEventListener('input', e => 
   activeStripFooterText = e.target.value;
   rebuildEditorStrip();
 });
-document.querySelector('#stripFooterFontSelect')?.addEventListener('change', e => {
+document.querySelector('#stripFooterFontSelect')?.addEventListener('change', async e => {
   activeStripFooterFont = e.target.value;
+  const input = document.querySelector('#stripFooterTextInput');
+  if (input) input.style.fontFamily = activeStripFooterFont;
+  await ensureFontLoaded(activeStripFooterFont, 20);
   rebuildEditorStrip();
 });
 document.querySelector('#chkStripShowDate')?.addEventListener('change', e => {
   activeStripShowDate = e.target.checked;
   rebuildEditorStrip();
 });
-
-function loadSavedFramesFromSupabase() {
-  if (!isSupabaseConfigured) return;
-  return loadSavedCatalog(FRAMES_CATALOG, {
-    fetchRecords: () => supabaseService.getFrames(),
-    idKey: 'frame_id',
-    fallbackName: 'กรอบบันทึก',
-    render: () => {
-      renderStripSetup();
-      renderEditorFrameRow();
-    }
-  });
-}
 
 function loadSavedStickersFromSupabase() {
   if (!isSupabaseConfigured) return;
@@ -756,19 +779,32 @@ function loadSavedStickersFromSupabase() {
   });
 }
 
+function syncEditorTabState() {
+  const hasPhoto = getLayers().some(layer => layer.type === 'base');
+  if (tabEditor) {
+    tabEditor.disabled = !hasPhoto;
+    tabEditor.title = hasPhoto ? 'ตกแต่งภาพถ่าย' : 'ถ่ายหรือนำเข้าภาพก่อนเพื่อเข้าหน้าตกแต่ง';
+  }
+}
+
 /**
  * Tab Navigation
  */
 function switchTab(tabName) {
   if (isCapturing || isChangingCamera) return;
   if (tabName === 'camera' && !hasChosenStrip) tabName = 'setup';
+  syncEditorTabState();
   if (tabName === 'editor' && !getLayers().some(layer => layer.type === 'base')) {
     showError('เลือกกรอบและถ่ายภาพก่อนดูรูปที่ได้');
     return;
   }
   document.querySelector('#tabSetup').classList.remove('active');
   document.querySelector('#viewSetup').classList.add('hidden');
-  if (tabName !== 'camera') handleStopCamera();
+  if (tabName !== 'camera') {
+    if (camSettingsDialog?.open) camSettingsDialog.close();
+    handleStopCamera();
+  }
+  if (tabName !== 'editor' && isDrawMode()) toggleDrawMode(false);
   tabCamera.classList.remove('active');
   tabEditor.classList.remove('active');
   tabTemplateGallery.classList.remove('active');
@@ -809,20 +845,30 @@ tabEditor.addEventListener('click', () => switchTab('editor'));
 tabTemplateGallery.addEventListener('click', () => switchTab('templates'));
 tabGallery.addEventListener('click', () => switchTab('gallery'));
 
-function switchAssetTab(tab) {
-  [tabStickers, tabText, tabDraw, tabUpload].forEach(b => b?.classList.remove('active'));
-  [stickerPanel, galleryText, galleryDraw, galleryUpload].forEach(p => p?.classList.add('hidden'));
-  if (tab !== 'draw' && isDrawMode()) toggleDrawMode(false);
-  if (tab === 'stickers') { tabStickers?.classList.add('active'); stickerPanel?.classList.remove('hidden'); }
-  else if (tab === 'text') { tabText?.classList.add('active'); galleryText?.classList.remove('hidden'); }
-  else if (tab === 'draw') { tabDraw?.classList.add('active'); galleryDraw?.classList.remove('hidden'); }
-  else if (tab === 'upload') { tabUpload?.classList.add('active'); galleryUpload?.classList.remove('hidden'); }
+function switchEditorTool(tool) {
+  activeEditorTool = tool;
+  if (tool !== 'draw' && isDrawMode()) toggleDrawMode(false);
+  document.querySelectorAll('.editor-tool-tab').forEach(btn => {
+    const isMatch = btn.dataset.tool === tool;
+    btn.classList.toggle('active', isMatch);
+    btn.setAttribute('aria-selected', String(isMatch));
+  });
+  document.querySelectorAll('.editor-tool-panel').forEach(panel => {
+    panel.classList.toggle('hidden', panel.dataset.panel !== tool);
+  });
 }
 
-tabStickers?.addEventListener('click', () => switchAssetTab('stickers'));
-tabText?.addEventListener('click', () => switchAssetTab('text'));
-tabDraw?.addEventListener('click', () => switchAssetTab('draw'));
-tabUpload?.addEventListener('click', () => switchAssetTab('upload'));
+document.querySelectorAll('.editor-tool-tab').forEach(btn => {
+  btn.addEventListener('click', () => switchEditorTool(btn.dataset.tool));
+});
+
+// Unified Export / Save Dialog
+document.querySelector('#btnOpenExportDialog')?.addEventListener('click', () => {
+  if (exportDialog && !exportDialog.open) exportDialog.showModal();
+});
+document.querySelector('#btnCloseExportDialog')?.addEventListener('click', () => {
+  exportDialog?.close();
+});
 
 // Text Layer Builder
 function buildTextLayerDataUrl(text, { font, color, stroke, showBg, bgColor }) {
@@ -867,6 +913,16 @@ function buildTextLayerDataUrl(text, { font, color, stroke, showBg, bgColor }) {
   return c.toDataURL('image/png');
 }
 
+const textLayerFontSelect = document.querySelector('#textLayerFont');
+const textLayerInputEl = document.querySelector('#textLayerInput');
+const syncTextInputFont = async () => {
+  const font = textLayerFontSelect?.value || "'IBM Plex Sans Thai', sans-serif";
+  if (textLayerInputEl) textLayerInputEl.style.fontFamily = font;
+  await ensureFontLoaded(font, 54);
+};
+textLayerFontSelect?.addEventListener('change', syncTextInputFont);
+syncTextInputFont();
+
 document.querySelector('#btnAddTextLayer')?.addEventListener('click', async () => {
   const input = document.querySelector('#textLayerInput');
   const text = input?.value.trim();
@@ -875,8 +931,10 @@ document.querySelector('#btnAddTextLayer')?.addEventListener('click', async () =
     input?.focus();
     return;
   }
+  const font = document.querySelector('#textLayerFont')?.value || "'IBM Plex Sans Thai', sans-serif";
+  await ensureFontLoaded(font, 54);
   const src = buildTextLayerDataUrl(text, {
-    font: document.querySelector('#textLayerFont')?.value || 'sans-serif',
+    font,
     color: document.querySelector('#textLayerColor')?.value || '#ffffff',
     stroke: Boolean(document.querySelector('#chkTextStroke')?.checked),
     showBg: Boolean(document.querySelector('#chkTextBg')?.checked),
@@ -990,10 +1048,33 @@ document.querySelector('#btnToolMirror')?.addEventListener('click', () => {
   applyLiveStreamFilters();
 });
 
+function updateCameraModesBadge() {
+  const badge = document.querySelector('#camActiveModesBadge');
+  if (!badge) return;
+  const parts = [];
+  if (liveVideoMode) parts.push('🎬 Live Strip');
+  if (shootPickTotal > 0 && !selectedStripFrame?.layout) parts.push(`ถ่าย ${shootPickTotal} เลือก ${activeBurstCount}`);
+  if (manualShutterMode) parts.push('👆 กดทีละช็อต');
+  if (!soundEnabled) parts.push('🔇 ปิดเสียง');
+  if (activeZoom > 1) parts.push(`🔍 ${activeZoom.toFixed(1)}x`);
+  if (Math.abs(activeBrightness - 1) >= 0.05) parts.push(`☀️ ${Math.round(activeBrightness * 100)}%`);
+  badge.textContent = parts.join(' · ');
+  badge.classList.toggle('hidden', parts.length === 0);
+}
+
+document.querySelector('#btnOpenCamSettings')?.addEventListener('click', () => {
+  if (camSettingsDialog && !camSettingsDialog.open) camSettingsDialog.showModal();
+});
+document.querySelector('#btnCloseCamSettings')?.addEventListener('click', () => {
+  camSettingsDialog?.close();
+});
+
 document.querySelector('#btnToolSound')?.addEventListener('click', e => {
   soundEnabled = !soundEnabled;
   e.currentTarget.setAttribute('aria-pressed', String(soundEnabled));
+  e.currentTarget.classList.toggle('active', soundEnabled);
   e.currentTarget.textContent = soundEnabled ? '🔊 เสียง' : '🔇 ปิดเสียง';
+  updateCameraModesBadge();
 });
 
 document.querySelector('#btnToolRingLight')?.addEventListener('click', e => {
@@ -1002,16 +1083,18 @@ document.querySelector('#btnToolRingLight')?.addEventListener('click', e => {
   ringLightIndex = (ringLightIndex + 1) % RING_LIGHT_MODES.length;
   const mode = RING_LIGHT_MODES[ringLightIndex];
   if (mode.cls) card?.classList.add(mode.cls);
-  e.currentTarget.textContent = `💡 ไฟขอบจอ: ${mode.label}`;
+  const label = document.querySelector('#ringLightLabel');
+  if (label) label.textContent = `ไฟ: ${mode.label}`;
   e.currentTarget.classList.toggle('active', ringLightIndex > 0);
 });
 
 const burstGapSelect = document.querySelector('#burstGapSelect');
 document.querySelector('#btnToolShutterMode')?.addEventListener('click', e => {
   manualShutterMode = !manualShutterMode;
-  e.currentTarget.textContent = manualShutterMode ? '👆 กดทีละช็อต' : '⚡ ถ่ายรัว';
+  e.currentTarget.textContent = manualShutterMode ? '👆 กดทีละช็อต' : '⚡ ถ่ายรัวอัตโนมัติ';
   e.currentTarget.classList.toggle('active', manualShutterMode);
   burstGapSelect?.classList.toggle('hidden', manualShutterMode);
+  updateCameraModesBadge();
 });
 burstGapSelect?.addEventListener('change', e => {
   burstGapSeconds = Math.max(1, Math.min(3, Number(e.target.value) || 1));
@@ -1078,12 +1161,15 @@ function applyLiveStreamFilters() {
 
 document.querySelector('#shootPickSelect')?.addEventListener('change', e => {
   shootPickTotal = Number(e.target.value) || 0;
+  updateCameraModesBadge();
 });
 
 document.querySelector('#btnToolLiveVideo')?.addEventListener('click', e => {
   liveVideoMode = !liveVideoMode;
   e.currentTarget.classList.toggle('active', liveVideoMode);
   e.currentTarget.setAttribute('aria-pressed', String(liveVideoMode));
+  e.currentTarget.textContent = liveVideoMode ? '🎬 เปิดอยู่' : '🎬 ปิดอยู่';
+  updateCameraModesBadge();
   showToast(liveVideoMode ? 'เปิดโหมด Live Strip แล้ว — จะอัดคลิปสั้น ~2 วิในแต่ละช็อต' : 'ปิดโหมด Live Strip แล้ว');
 });
 
@@ -1094,75 +1180,37 @@ function cycleAspectRatio() {
   const currentIdx = ASPECT_STEPS.indexOf(currentAspectRatio);
   const nextIdx = (currentIdx + 1) % ASPECT_STEPS.length;
   currentAspectRatio = ASPECT_STEPS[nextIdx];
-  btnAspectActive.textContent = currentAspectRatio;
+  if (btnAspectActive) btnAspectActive.textContent = currentAspectRatio;
   previewBox.style.aspectRatio = currentAspectRatio.replace(':', ' / ');
   updateStripSummary();
 }
 
 btnAspectActive?.addEventListener('click', cycleAspectRatio);
-btnAspectArrow?.addEventListener('click', cycleAspectRatio);
 
-// 2. Filter Carousel & Realtime Preview (with Mouse Wheel Scroll Support)
-function renderFilterCarousel() {
-  if (!filterCarouselTrack) return;
-  filterCarouselTrack.innerHTML = FILTERS_CATALOG.map((f, i) => `
-    <div class="filter-swatch-item ${i === activeFilterIndex ? 'active' : ''}" data-index="${i}">
+// 2. Horizontal Live Filter Strip
+function renderCameraFilterStrip() {
+  if (!camFilterStrip) return;
+  camFilterStrip.innerHTML = FILTERS_CATALOG.map((f, i) => `
+    <button type="button" class="gallery-item filter-item ${i === activeFilterIndex ? 'selected' : ''}" data-index="${i}">
       <div class="filter-swatch-box ${f.class}"></div>
-      <span class="filter-swatch-name">${f.name}</span>
-    </div>
+      <span class="item-name">${f.name}</span>
+    </button>
   `).join('');
 
-  filterCarouselTrack.querySelectorAll('.filter-swatch-item').forEach(item => {
-    item.addEventListener('click', (e) => {
-      const idx = parseInt(e.currentTarget.dataset.index, 10);
-      selectFilter(idx);
+  camFilterStrip.querySelectorAll('.filter-item').forEach(item => {
+    item.addEventListener('click', e => {
+      selectFilter(parseInt(e.currentTarget.dataset.index, 10));
     });
   });
-
-  updateFilterTrackPosition();
 }
 
 function selectFilter(index) {
   activeFilterIndex = index;
-  document.querySelector('#cameraFilterSelect').value = String(index);
-  renderFilterCarousel();
+  renderCameraFilterStrip();
   applyLiveStreamFilters();
 }
 
-function updateFilterTrackPosition() {
-  if (!filterCarouselTrack) return;
-  const offset = -(activeFilterIndex * 66);
-  filterCarouselTrack.style.transform = `translateY(${offset}px)`;
-}
-
-btnFilterUp?.addEventListener('click', () => {
-  activeFilterIndex = (activeFilterIndex - 1 + FILTERS_CATALOG.length) % FILTERS_CATALOG.length;
-  selectFilter(activeFilterIndex);
-});
-
-btnFilterDown?.addEventListener('click', () => {
-  activeFilterIndex = (activeFilterIndex + 1) % FILTERS_CATALOG.length;
-  selectFilter(activeFilterIndex);
-});
-
-// Enable Mouse Wheel Scroll on Filter Viewport
-const filterCarouselViewport = document.querySelector('.filter-carousel-viewport');
-filterCarouselViewport?.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  if (e.deltaY > 0) {
-    activeFilterIndex = (activeFilterIndex + 1) % FILTERS_CATALOG.length;
-  } else if (e.deltaY < 0) {
-    activeFilterIndex = (activeFilterIndex - 1 + FILTERS_CATALOG.length) % FILTERS_CATALOG.length;
-  }
-  selectFilter(activeFilterIndex);
-}, { passive: false });
-
-// Initial Carousel Render
-const cameraFilterSelect = document.querySelector('#cameraFilterSelect');
-cameraFilterSelect.replaceChildren(...FILTERS_CATALOG.map((filter, index) => new Option(filter.name, String(index))));
-cameraFilterSelect.value = String(activeFilterIndex);
-cameraFilterSelect.addEventListener('change', event => selectFilter(Number(event.target.value)));
-renderFilterCarousel();
+renderCameraFilterStrip();
 
 // 3. Countdown Timer Cycle (0, 3, 5, 10)
 const TIMER_STEPS = [0, 3, 5, 10];
@@ -1171,23 +1219,30 @@ function cycleTimer() {
   const currentIdx = TIMER_STEPS.indexOf(activeTimerSeconds);
   const nextIdx = (currentIdx + 1) % TIMER_STEPS.length;
   activeTimerSeconds = TIMER_STEPS[nextIdx];
-  btnTimerActive.textContent = `${activeTimerSeconds}s`;
+  const label = document.querySelector('#timerBadgeLabel');
+  if (label) label.textContent = activeTimerSeconds === 0 ? 'ไม่ตั้งเวลา' : `${activeTimerSeconds} วิ`;
+  btnTimerActive?.classList.toggle('active', activeTimerSeconds > 0);
 }
 
 btnTimerActive?.addEventListener('click', cycleTimer);
-btnTimerArrow?.addEventListener('click', cycleTimer);
 
 // 4. Brightness & Zoom Sliders
 brightnessSlider?.addEventListener('input', (e) => {
   activeBrightness = parseFloat(e.target.value);
+  const label = document.querySelector('#brightnessValueLabel');
+  if (label) label.textContent = `${Math.round(activeBrightness * 100)}%`;
   applyLiveStreamFilters();
+  updateCameraModesBadge();
 });
 
 zoomSlider?.addEventListener('input', async (e) => {
   activeZoom = parseFloat(e.target.value);
+  const label = document.querySelector('#zoomValueLabel');
+  if (label) label.textContent = `${activeZoom.toFixed(1)}x`;
   // ต้องรู้ผลของซูมฮาร์ดแวร์ก่อน ถึงจะตัดสินใจได้ว่าต้องซูมด้วย CSS ซ้ำหรือไม่
   usingCssZoom = !(await setZoom(activeZoom));
   applyLiveStreamFilters();
+  updateCameraModesBadge();
 });
 
 /**
@@ -1241,6 +1296,7 @@ function syncCanvasContainerRatio() {
 btnToolGrid?.addEventListener('click', () => {
   isGridActive = !isGridActive;
   btnToolGrid.classList.toggle('active', isGridActive);
+  btnToolGrid.setAttribute('aria-pressed', String(isGridActive));
   camGridOverlay.classList.toggle('active', isGridActive);
 });
 
@@ -1254,7 +1310,6 @@ btnToolBurst?.addEventListener('click', () => {
   activeBurstCount = BURST_STEPS[nextIdx];
   burstBadge.textContent = `${activeBurstCount}x`;
   btnToolBurst.classList.toggle('active', activeBurstCount > 1);
-  document.querySelector('#stripShotCount').value = String(activeBurstCount);
   updateStripSummary();
 });
 
@@ -1351,29 +1406,46 @@ let cutoutState = null;
 function drawCutoutPreview() {
   if (!cutoutState) return;
   const { w, h, imageData, workCtx, work } = cutoutState;
-  workCtx.putImageData(imageData, 0, 0);
+  const previewData = new ImageData(new Uint8ClampedArray(imageData.data), w, h);
+  clearSelectedFrameSlots(previewData, cutoutState.candidates);
+  workCtx.putImageData(previewData, 0, 0);
 
   const g = frameCutoutCanvas.getContext('2d');
   const css = getComputedStyle(document.documentElement);
   const c1 = css.getPropertyValue('--surface').trim() || '#ffffff';
-  const c2 = css.getPropertyValue('--surface-sunken').trim() || '#eeeeee';
+  const c2 = css.getPropertyValue('--surface-sunken').trim() || '#e5dce8';
 
-  // พื้นตารางให้เห็นชัดว่าตรงไหนโปร่งแล้ว
-  const S = 12;
+  // พื้นตารางให้เห็นชัดว่าตรงไหนเจาะโปร่งแล้ว
+  const S = Math.max(10, Math.round(w / 48));
   for (let y = 0; y < h; y += S) {
     for (let x = 0; x < w; x += S) {
-      g.fillStyle = ((x / S + y / S) % 2 === 0) ? c1 : c2;
+      g.fillStyle = ((Math.floor(x / S) + Math.floor(y / S)) % 2 === 0) ? c1 : c2;
       g.fillRect(x, y, S, S);
     }
   }
   g.drawImage(work, 0, 0);
+
   for (const [index, slot] of cutoutState.candidates.entries()) {
-    g.strokeStyle = slot.selected ? '#00a65a' : '#ff0066';
-    g.lineWidth = Math.max(2, w / 250);
-    g.strokeRect(slot.minX, slot.minY, slot.maxX - slot.minX + 1, slot.maxY - slot.minY + 1);
-    g.font = `bold ${Math.max(16, w / 30)}px sans-serif`;
-    g.fillStyle = g.strokeStyle;
-    g.fillText(String(index + 1), slot.minX + 4, slot.minY + Math.max(18, w / 28));
+    const cx = Math.round((slot.minX + slot.maxX) / 2);
+    const cy = Math.round((slot.minY + slot.maxY) / 2);
+    if (!slot.selected || cutoutState.editingCandidate === index) {
+      g.save();
+      g.setLineDash([8, 6]);
+      g.strokeStyle = cutoutState.editingCandidate === index ? '#00a65a' : '#ff0066';
+      g.lineWidth = Math.max(2, w / 260);
+      g.strokeRect(slot.minX, slot.minY, slot.maxX - slot.minX + 1, slot.maxY - slot.minY + 1);
+      g.restore();
+    }
+    const r = Math.max(14, Math.round(w / 34));
+    g.beginPath();
+    g.arc(cx, cy, r, 0, Math.PI * 2);
+    g.fillStyle = slot.selected ? 'rgba(14, 102, 71, 0.9)' : 'rgba(176, 36, 85, 0.82)';
+    g.fill();
+    g.fillStyle = '#ffffff';
+    g.font = `bold ${Math.max(14, Math.round(r * 1.15))}px sans-serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(String(index + 1), cx, cy);
   }
 }
 
@@ -1394,11 +1466,12 @@ function renderCutoutCandidates() {
     const adjust = document.createElement('button');
     adjust.type = 'button';
     adjust.className = 'btn btn-sm btn-secondary';
-    adjust.textContent = 'ปรับขอบ';
+    adjust.textContent = 'ปรับขอบเอง';
     adjust.addEventListener('click', () => {
       cutoutState.editingCandidate = index;
       cutoutState.firstCorner = null;
-      document.querySelector('#cutoutStatus').textContent = `แตะสองมุมใหม่สำหรับช่อง ${index + 1}`;
+      document.querySelector('#cutoutStatus').textContent = `แตะ 2 มุมใหม่สำหรับช่อง ${index + 1}`;
+      drawCutoutPreview();
     });
     row.append(label, adjust);
     list.append(row);
@@ -1409,6 +1482,7 @@ async function openCutoutPicker(source, requireSlots = false, candidates = []) {
   if (!source) return null;
   const { canvas, ctx, w, h } = await loadFrameCanvas(source);
   const imageData = ctx.getImageData(0, 0, w, h);
+  const autoSelect = candidates.length > 0 && candidates.length <= 4;
 
   cutoutState = {
     work: canvas,
@@ -1418,7 +1492,11 @@ async function openCutoutPicker(source, requireSlots = false, candidates = []) {
     imageData,
     original: new Uint8ClampedArray(imageData.data),
     requireSlots,
-    candidates: candidates.map(slot => ({ ...slot, selected: false })),
+    candidates: candidates.map(slot => ({
+      ...slot,
+      pixelSet: Array.isArray(slot.pixels) ? new Set(slot.pixels) : null,
+      selected: autoSelect
+    })),
     editingCandidate: null,
     firstCorner: null,
     resolve: null
@@ -1426,9 +1504,10 @@ async function openCutoutPicker(source, requireSlots = false, candidates = []) {
 
   frameCutoutCanvas.width = w;
   frameCutoutCanvas.height = h;
-  document.querySelector('#cutoutSelectionMode').value = 'rectangle';
-  document.querySelector('#cutoutStatus').textContent = 'แตะมุมแรกและมุมตรงข้ามของช่องภาพ เก็บลายกรอบหรือข้อความไว้นอกช่อง ทำซ้ำได้ 1–4 ช่อง หรือเลือกวิธีลบตามสีสำหรับพื้นสีเขียว';
-  if (candidates.length) document.querySelector('#cutoutStatus').textContent = 'เลือกช่องจากรายการด้านบน (สีเขียว = เลือกแล้ว) กดปรับขอบเพื่อแตะสองมุมใหม่ หรือแตะสองมุมบนภาพเพื่อเพิ่มช่องเอง แล้วกดใช้กรอบนี้';
+  document.querySelector('#cutoutSelectionMode').value = 'color';
+  document.querySelector('#cutoutStatus').textContent = autoSelect
+    ? `พบ ${candidates.length} ช่องใส่รูปอัตโนมัติแล้ว (พื้นที่ตารางหมากรุก) — กด "✅ ใช้กรอบนี้" ได้เลย หรือแตะที่ช่องเพื่อเปิด/ปิด`
+    : 'แตะ 1 ครั้งตรงพื้นที่สีขาว/ช่องว่างในกรอบเพื่อเจาะช่องใส่รูป (ทำซ้ำได้ 1–4 ช่อง) แล้วกด "✅ ใช้กรอบนี้"';
   renderCutoutCandidates();
   drawCutoutPreview();
   frameCutoutModal.classList.remove('hidden');
@@ -1470,14 +1549,15 @@ frameCutoutCanvas?.addEventListener('click', (e) => {
         if (first.x === x || first.y === y) throw new Error('กรุณาเลือกสองมุมให้เป็นช่องภาพสี่เหลี่ยม');
         Object.assign(cutoutState.candidates[cutoutState.editingCandidate], {
           minX: Math.min(first.x, x), minY: Math.min(first.y, y),
-          maxX: Math.max(first.x, x), maxY: Math.max(first.y, y), selected: true
+          maxX: Math.max(first.x, x), maxY: Math.max(first.y, y),
+          pixels: null, pixelSet: null, selected: true
         });
         cutoutState.editingCandidate = null;
         renderCutoutCandidates();
       } else {
         clearFrameRectangle(imageData, cutoutState.firstCorner, { x, y });
       }
-      status.textContent = 'เจาะช่องแล้ว เลือกสองมุมเพื่อเพิ่มช่อง หรือกดใช้กรอบนี้';
+      status.textContent = 'เจาะช่องแล้ว กด "✅ ใช้กรอบนี้" หรือแตะเพื่อเพิ่มช่องอีกได้';
     } catch (error) {
       status.textContent = error.message;
     }
@@ -1485,14 +1565,27 @@ frameCutoutCanvas?.addEventListener('click', (e) => {
     drawCutoutPreview();
     return;
   }
+
   const idx = y * w + x;
+  // ถ้าแตะโดนช่องที่ระบบตรวจพบไว้แล้ว ให้สลับเปิด/ปิดช่องนั้นทันที
+  const hitCandidate = cutoutState.candidates.find(slot =>
+    slot.pixelSet
+      ? slot.pixelSet.has(idx)
+      : (x >= slot.minX && x <= slot.maxX && y >= slot.minY && y <= slot.maxY)
+  );
+  if (hitCandidate) {
+    hitCandidate.selected = !hitCandidate.selected;
+    renderCutoutCandidates();
+    drawCutoutPreview();
+    return;
+  }
+
   if (imageData.data[idx * 4 + 3] === 0) return; // ตรงนี้โปร่งอยู่แล้ว
 
-  const base = parseInt(cutoutTolerance.value, 10) || 30;
-
+  const base = parseInt(cutoutTolerance.value, 10) || 35;
   const region = floodFillRegion(imageData.data, w, h, idx, base);
-
   for (const p of region.pixels) imageData.data[p * 4 + 3] = 0;
+  document.querySelector('#cutoutStatus').textContent = 'เจาะช่องตามรูปทรงแล้ว กด "✅ ใช้กรอบนี้" หรือแตะช่องอื่นเพิ่มได้';
   drawCutoutPreview();
 });
 
@@ -1651,6 +1744,10 @@ function getLayerDisplayName(layer) {
 function refreshLayerListUI() {
   const layers = getLayers();
   const selectedId = getSelectedLayerId();
+  syncEditorTabState();
+  if (layerTabCount) {
+    layerTabCount.textContent = String(layers.filter(l => l.type !== 'base').length);
+  }
   layerList.innerHTML = '';
 
   if (layers.length === 0) {
@@ -1821,17 +1918,7 @@ async function buildTemplateCoverBlob() {
   if (capturedContext?.decoration) {
     g.drawImage(capturedContext.decoration, 0, 0, cw, ch);
   }
-  const layerScale = Math.min(cw / w, ch / h);
-  for (const layer of getLayers().filter(l => l.type !== 'base' && l.image)) {
-    g.save();
-    g.globalAlpha = layer.opacity ?? 1;
-    g.translate((layer.x / w) * cw, (layer.y / h) * ch);
-    g.rotate(((layer.rotation || 0) * Math.PI) / 180);
-    const dw = layer.width * layerScale * (layer.scaleX || 1) * (layer.scale || 1);
-    const dh = layer.height * layerScale * (layer.scaleY || 1) * (layer.scale || 1);
-    g.drawImage(layer.image, -dw / 2, -dh / 2, dw, dh);
-    g.restore();
-  }
+  drawScaledLayers(g, getLayers().filter(l => l.type !== 'base'), { width: w, height: h }, cw, ch);
   return new Promise(resolve => c.toBlob(resolve, 'image/png'));
 }
 
@@ -1839,6 +1926,7 @@ async function buildTemplateCoverBlob() {
  * Save Template Modal Logic
  */
 btnSaveTemplate.addEventListener('click', () => {
+  if (exportDialog?.open) exportDialog.close();
   if (!currentUser) {
     showToast('กรุณาเข้าสู่ระบบก่อนเพื่อบันทึกเทมเพลต');
     authModal.classList.remove('hidden');
@@ -2157,13 +2245,7 @@ function renderSessionGallery() {
  */
 async function loadPhotoToEditor(dataUrl) {
   try {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = reject;
-      img.src = dataUrl;
-    });
+    const img = await loadImage(dataUrl);
 
     setTargetCanvas(canvasElement);
 
@@ -2173,11 +2255,17 @@ async function loadPhotoToEditor(dataUrl) {
     offscreen.height = img.height;
     offscreen.getContext('2d').drawImage(img, 0, 0);
 
+    // ล้างสติกเกอร์ กรอบ และเส้นวาดของรูปก่อนหน้าไม่ให้ค้างติดมา
+    getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id, { recordHistory: false }));
+    clearDoodle({ recordHistory: false });
+    resetHistory();
+
     // setBaseLayerImage ปรับขนาด canvas ให้ตรงกับภาพให้เอง
     // (ของเดิมเรียก captureFrame() ซึ่งไปตั้งขนาด canvas เป็นขนาดวิดีโอ ไม่ใช่ขนาดภาพ)
     setBaseLayerImage(offscreen);
     capturedFrames = [];
     capturedGifFrames = [];
+    setLiveClips([]);
     capturedContext = null;
     retakingShotIndex = null;
     renderShotRetakeBar();
@@ -2188,6 +2276,7 @@ async function loadPhotoToEditor(dataUrl) {
     renderEditorBgColorRow();
 
     refreshLayerListUI();
+    switchEditorTool('filter');
     switchTab('editor');
     updateStatus(true, '📸 โหลดภาพจากคลังเรียบร้อย - แก้ไขเพิ่มเติมได้!');
   } catch (err) {
@@ -2206,17 +2295,19 @@ btnRetake?.addEventListener('click', () => {
   capturedContext = null;
   retakingShotIndex = null;
   renderShotRetakeBar();
-  // ล้างสติกเกอร์ของช็อตที่แล้ว แต่คงกรอบไว้ (กรอบมักเป็นธีมของงานที่ใช้ซ้ำทุกช็อต)
-  // ของเดิมแค่สลับแท็บ สติกเกอร์เก่าจึงค้างติดไปกับภาพใหม่
+  // ล้างสติกเกอร์และเส้นวาดของช็อตที่แล้ว แต่คงกรอบไว้ (กรอบมักเป็นธีมของงานที่ใช้ซ้ำทุกช็อต)
   getLayers()
     .filter(l => l.type === 'sticker')
-    .forEach(l => removeLayer(l.id));
+    .forEach(l => removeLayer(l.id, { recordHistory: false }));
+  clearDoodle({ recordHistory: false });
+  resetHistory();
   refreshLayerListUI();
   switchTab('camera');
 });
 
 btnExport?.addEventListener('click', async () => {
   try {
+    if (exportDialog?.open) exportDialog.close();
     await downloadImage('snapframe-photo.png', 'image/png');
     handleSaveToSessionGallery();
   } catch (error) {
@@ -2233,11 +2324,8 @@ const storyPreviewImage = document.querySelector('#storyPreviewImage');
 
 async function renderStoryPreview() {
   const cleanDataUrl = exportImage('image/png');
-  const img = new Image();
-  await new Promise((resolve, reject) => {
-    img.onload = resolve;
-    img.onerror = () => reject(new Error('เตรียมภาพ IG Story ไม่สำเร็จ'));
-    img.src = cleanDataUrl;
+  const img = await loadImage(cleanDataUrl).catch(() => {
+    throw new Error('เตรียมภาพ IG Story ไม่สำเร็จ');
   });
   const storyCanvas = composeStoryCanvas(img, {
     bgStyle: storyBgStyleSelect?.value || 'blur',
@@ -2247,6 +2335,7 @@ async function renderStoryPreview() {
 }
 
 document.querySelector('#btnExportStory')?.addEventListener('click', async () => {
+  if (exportDialog?.open) exportDialog.close();
   try {
     await renderStoryPreview();
     storyPreviewDialog?.showModal();
@@ -2290,10 +2379,14 @@ async function renderGifPreview({ openDialog = false } = {}) {
     const sourceSize = { width: canvasElement.width, height: canvasElement.height };
     const delay = Number(document.querySelector('#gifSpeedSelect')?.value) || 450;
     const boomerang = Boolean(document.querySelector('#chkGifBoomerang')?.checked);
+    const stripLayout = capturedContext
+      ? (capturedContext.frameLayout || getStripLayout(photos.length, 960, capturedContext.aspectRatio, capturedContext.stripOrientation))
+      : null;
     const blob = await encodePhotoGif(
       readGifFrames(photos, frameOverlay, stickers, sourceSize, {
         filter: activeEditorFilter,
-        doodle: getDoodleCanvas()
+        doodle: getDoodleCanvas(),
+        slots: stripLayout?.slots || null
       }),
       (current, total) => {
         const msg = `กำลังสร้าง ${boomerang ? 'Boomerang' : 'GIF'} ${current}/${total}…`;
@@ -2324,7 +2417,10 @@ async function renderGifPreview({ openDialog = false } = {}) {
   }
 }
 
-document.querySelector('#btnExportGif').addEventListener('click', () => renderGifPreview({ openDialog: true }));
+document.querySelector('#btnExportGif').addEventListener('click', () => {
+  if (exportDialog?.open) exportDialog.close();
+  renderGifPreview({ openDialog: true });
+});
 document.querySelector('#gifSpeedSelect')?.addEventListener('change', () => {
   if (gifPreviewDialog.open) renderGifPreview({ openDialog: false });
 });
@@ -2332,17 +2428,27 @@ document.querySelector('#chkGifBoomerang')?.addEventListener('change', () => {
   if (gifPreviewDialog.open) renderGifPreview({ openDialog: false });
 });
 
-// Live Strip Video Export (MP4/WebM)
+// Live Strip Video Preview & Download (MP4/WebM)
+const liveVideoPreviewDialog = document.querySelector('#liveVideoPreviewDialog');
+const liveVideoPreviewPlayer = document.querySelector('#liveVideoPreviewPlayer');
+const liveVideoPreviewStatus = document.querySelector('#liveVideoPreviewStatus');
+const btnDownloadLiveVideo = document.querySelector('#btnDownloadLiveVideo');
+
 document.querySelector('#btnExportLiveVideo')?.addEventListener('click', async e => {
+  if (exportDialog?.open) exportDialog.close();
   const button = e.currentTarget;
   const status = document.querySelector('#gifStatus');
-  if (!capturedLiveClips.length || !capturedContext) return;
+  const clipsSnapshot = capturedLiveClips;
+  if (!clipsSnapshot.length || !capturedContext) return;
   button.disabled = true;
+  clearLiveVideoPreview();
+  if (liveVideoPreviewStatus) liveVideoPreviewStatus.textContent = 'กำลังสร้างวิดีโอ Live Strip...';
+  if (liveVideoPreviewDialog && !liveVideoPreviewDialog.open) liveVideoPreviewDialog.showModal();
   try {
     const stickers = getLayers().filter(l => l.type === 'sticker');
     const sourceSize = { width: canvasElement.width, height: canvasElement.height };
     const { blob, ext } = await exportLiveStripVideo(
-      capturedLiveClips,
+      clipsSnapshot,
       {
         decoration: capturedContext.decoration,
         aspectRatio: capturedContext.aspectRatio,
@@ -2360,21 +2466,54 @@ document.querySelector('#btnExportLiveVideo')?.addEventListener('click', async e
         doodle: getDoodleCanvas(),
         sourceSize
       },
-      (cur, total) => { status.textContent = `กำลังสร้างวิดีโอ Live Strip ${Math.round((cur / total) * 100)}%…`; }
+      (cur, total) => {
+        const msg = `กำลังสร้างวิดีโอ Live Strip ${Math.round((cur / total) * 100)}%…`;
+        status.textContent = msg;
+        if (liveVideoPreviewStatus) liveVideoPreviewStatus.textContent = msg;
+      }
     );
+    if (clipsSnapshot !== capturedLiveClips || !liveVideoPreviewDialog?.open) return;
     const url = URL.createObjectURL(blob);
-    try {
-      await downloadDataUrl(url, `snapframe-live-strip.${ext}`, blob.type);
-    } finally {
-      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    liveVideoPreviewState = { url, ext, mimeType: blob.type || `video/${ext}` };
+    if (liveVideoPreviewPlayer) {
+      liveVideoPreviewPlayer.src = url;
+      liveVideoPreviewPlayer.play?.().catch(() => {});
     }
-    status.textContent = `บันทึกวิดีโอ Live Strip (.${ext}) เรียบร้อยแล้ว!`;
-    showToast(`ดาวน์โหลดวิดีโอ Live Strip (.${ext}) เรียบร้อยแล้ว!`, 'success');
+    if (btnDownloadLiveVideo) btnDownloadLiveVideo.disabled = false;
+    if (liveVideoPreviewStatus) liveVideoPreviewStatus.textContent = `พรีวิวพร้อมแล้ว (.${ext}) ตรวจสอบวิดีโอแล้วกดดาวน์โหลดได้เลย`;
+    status.textContent = `พรีวิววิดีโอ Live Strip (.${ext}) พร้อมแล้ว`;
   } catch (err) {
-    status.textContent = `สร้างวิดีโอ Live Strip ไม่สำเร็จ: ${err.message}`;
+    const msg = `สร้างวิดีโอ Live Strip ไม่สำเร็จ: ${err.message}`;
+    status.textContent = msg;
+    if (liveVideoPreviewStatus) liveVideoPreviewStatus.textContent = msg;
     showError(err.message);
   } finally {
     button.disabled = capturedLiveClips.length === 0;
+  }
+});
+
+document.querySelector('#btnCloseLiveVideoPreview')?.addEventListener('click', () => liveVideoPreviewDialog?.close());
+liveVideoPreviewDialog?.addEventListener('close', () => {
+  clearLiveVideoPreview();
+  document.querySelector('#btnExportLiveVideo')?.focus();
+});
+btnDownloadLiveVideo?.addEventListener('click', async event => {
+  if (!liveVideoPreviewState?.url) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await downloadDataUrl(
+      liveVideoPreviewState.url,
+      `snapframe-live-strip.${liveVideoPreviewState.ext}`,
+      liveVideoPreviewState.mimeType
+    );
+    showToast(`ดาวน์โหลดวิดีโอ Live Strip (.${liveVideoPreviewState.ext}) เรียบร้อยแล้ว!`, 'success');
+    liveVideoPreviewDialog?.close();
+  } catch (err) {
+    if (liveVideoPreviewStatus) liveVideoPreviewStatus.textContent = `บันทึกวิดีโอไม่สำเร็จ: ${err.message}`;
+    showError(`บันทึกวิดีโอไม่สำเร็จ: ${err.message}`);
+  } finally {
+    button.disabled = !liveVideoPreviewState?.url;
   }
 });
 
@@ -2468,33 +2607,43 @@ document.querySelector('#btnCopyPhoto').addEventListener('click', async event =>
 function updateStripSummary() {
   const layout = selectedStripFrame?.layout;
   if (activeCaptureTemplate) activeBurstCount = activeCaptureTemplate.capture.count;
-  btnToolBurst.disabled = !!activeCaptureTemplate || !!layout;
-  btnToolBurst.title = activeCaptureTemplate ? 'จำนวนภาพถูกล็อคตามเทมเพลต' : 'ถ่ายภาพเรียงต่อกัน';
-  burstBadge.textContent = `${activeBurstCount}x`;
+  if (btnToolBurst) {
+    btnToolBurst.disabled = !!activeCaptureTemplate || !!layout;
+    btnToolBurst.title = activeCaptureTemplate ? 'จำนวนภาพถูกล็อคตามเทมเพลต' : 'ถ่ายภาพเรียงต่อกัน';
+  }
+  if (burstBadge) burstBadge.textContent = `${activeBurstCount}x`;
   document.querySelector('#stripCameraSummary').textContent = `${activeCaptureTemplate ? `เทมเพลต ${activeCaptureTemplate.name}` : selectedStripFrame?.name || 'ไม่ใช้กรอบ'} · ${activeBurstCount} ภาพ${getStripDirectionLabel()}`;
-  btnAspectActive.disabled = !!layout;
-  btnAspectArrow.disabled = !!layout;
-  btnAspectActive.textContent = layout ? 'ตามกรอบ' : currentAspectRatio;
+  if (btnAspectActive) {
+    btnAspectActive.disabled = !!layout;
+    btnAspectActive.textContent = layout ? 'ตามกรอบ' : currentAspectRatio;
+  }
   previewBox.style.aspectRatio = layout
     ? `${layout.slots[0].width} / ${layout.slots[0].height}` : currentAspectRatio.replace(':', ' / ');
+  updateCameraModesBadge();
 }
 
 function renderStripSetup() {
   const layout = selectedStripFrame?.layout;
-  const orientationSelect = document.querySelector('#stripOrientation');
-  orientationSelect.value = stripOrientation;
-  orientationSelect.disabled = !!layout || !!activeCaptureTemplate;
+  const locked = !!layout || !!activeCaptureTemplate;
+  document.querySelectorAll('#stripOrientationChips .setup-chip').forEach(btn => {
+    const active = btn.dataset.orientation === stripOrientation;
+    btn.classList.toggle('selected', active);
+    btn.setAttribute('aria-pressed', String(active));
+    btn.disabled = locked;
+  });
   document.querySelector('#stripOrientationHint').textContent = layout
     ? 'กรอบนี้จัดภาพตามช่องที่กำหนดไว้ เลือกกรอบสำเร็จรูปเพื่อเปลี่ยนแนวการเรียงภาพ'
     : 'แนวนอนเรียงจากซ้ายไปขวา เมื่อเลือก 4 ภาพจะจัดเป็น 2 แถว แถวละ 2 ภาพ';
   if (layout) activeBurstCount = layout.slots.length;
   if (activeCaptureTemplate) activeBurstCount = activeCaptureTemplate.capture.count;
-  const countSelect = document.querySelector('#stripShotCount');
-  countSelect.value = String(activeBurstCount);
-  countSelect.disabled = !!layout || !!activeCaptureTemplate;
-  countSelect.title = activeCaptureTemplate ? 'จำนวนภาพถูกล็อคตามเทมเพลต' : layout ? 'จำนวนภาพตรงกับช่องที่ตรวจพบในกรอบ' : 'เลือกจำนวนภาพ';
-  btnToolBurst.disabled = !!layout || !!activeCaptureTemplate;
-  burstBadge.textContent = `${activeBurstCount}x`;
+  document.querySelectorAll('#stripShotCountChips .setup-chip').forEach(btn => {
+    const active = Number(btn.dataset.count) === activeBurstCount;
+    btn.classList.toggle('selected', active);
+    btn.setAttribute('aria-pressed', String(active));
+    btn.disabled = locked;
+  });
+  if (btnToolBurst) btnToolBurst.disabled = locked;
+  if (burstBadge) burstBadge.textContent = `${activeBurstCount}x`;
   const choices = document.querySelector('#stripFrameChoices');
   choices.replaceChildren();
   [null, ...FRAMES_CATALOG.filter(frame => BUILTIN_FRAME_IDS.has(frame.id) || frame.stripUpload)].forEach(frame => {
@@ -2561,6 +2710,10 @@ function swapCapturedShots(indexA, indexB) {
     [capturedGifFrames[indexA], capturedGifFrames[indexB]] = [capturedGifFrames[indexB], capturedGifFrames[indexA]];
     setGifPhotos([...capturedGifFrames]);
   }
+  if (capturedLiveClips[indexA] && capturedLiveClips[indexB]) {
+    [capturedLiveClips[indexA], capturedLiveClips[indexB]] = [capturedLiveClips[indexB], capturedLiveClips[indexA]];
+    setLiveClips([...capturedLiveClips]);
+  }
   rebuildEditorStrip();
   renderShotRetakeBar();
 }
@@ -2568,13 +2721,15 @@ function swapCapturedShots(indexA, indexB) {
 function renderShotRetakeBar() {
   const bar = document.querySelector('#shotRetakeBar');
   const container = document.querySelector('#shotRetakeButtons');
+  const tabShots = document.querySelector('#toolTabShots');
   if (!bar || !container) return;
   if (capturedFrames.length < 1) {
-    bar.classList.add('hidden');
+    tabShots?.classList.add('hidden');
+    if (activeEditorTool === 'shots') switchEditorTool('filter');
     container.replaceChildren();
     return;
   }
-  bar.classList.remove('hidden');
+  tabShots?.classList.remove('hidden');
   container.replaceChildren(...capturedFrames.map((frameCanvas, index) => {
     const card = document.createElement('div');
     card.className = 'shot-manage-card';
@@ -2636,34 +2791,66 @@ function renderShotRetakeBar() {
 }
 
 async function fileToFittedCanvas(file, targetAspect) {
-  const url = URL.createObjectURL(file);
-  try {
-    const img = new Image();
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = () => reject(new Error(`อ่านไฟล์ "${file.name}" ไม่สำเร็จ`));
-      img.src = url;
-    });
-    const iw = img.naturalWidth || img.width;
-    const ih = img.naturalHeight || img.height;
-    let sw = iw, sh = ih;
-    if (iw / ih > targetAspect) {
-      sh = ih;
-      sw = Math.round(ih * targetAspect);
-    } else {
-      sw = iw;
-      sh = Math.round(iw / targetAspect);
-    }
-    const maxSide = 1280;
-    const scale = Math.min(1, maxSide / Math.max(sw, sh));
-    const c = document.createElement('canvas');
-    c.width = Math.max(1, Math.round(sw * scale));
-    c.height = Math.max(1, Math.round(sh * scale));
-    c.getContext('2d').drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, 0, 0, c.width, c.height);
-    return c;
-  } finally {
-    URL.revokeObjectURL(url);
+  const img = await loadImageFromBlob(file).catch(() => {
+    throw new Error(`อ่านไฟล์ "${file.name}" ไม่สำเร็จ`);
+  });
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  let sw = iw, sh = ih;
+  if (iw / ih > targetAspect) {
+    sh = ih;
+    sw = Math.round(ih * targetAspect);
+  } else {
+    sw = iw;
+    sh = Math.round(iw / targetAspect);
   }
+  const maxSide = 1280;
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(sw * scale));
+  c.height = Math.max(1, Math.round(sh * scale));
+  c.getContext('2d').drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, 0, 0, c.width, c.height);
+  return c;
+}
+
+async function openStripInEditor({
+  frames,
+  animationFrames,
+  liveClips = [],
+  filterCss = 'none',
+  decoration,
+  aspectRatio,
+  frameLayout,
+  savedFrame,
+  applyTemplateDesign = false
+}) {
+  activeEditorFilter = filterCss;
+  capturedFrames = frames;
+  capturedGifFrames = animationFrames;
+  setLiveClips(liveClips);
+  capturedContext = {
+    frame: selectedStripFrame,
+    decoration,
+    aspectRatio,
+    frameLayout,
+    stripOrientation
+  };
+  setTargetCanvas(canvasElement);
+  getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id, { recordHistory: false }));
+  clearDoodle({ recordHistory: false });
+  resetHistory();
+  rebuildEditorStrip();
+  if (applyTemplateDesign && activeCaptureTemplate) {
+    await loadTemplateDesign(activeCaptureTemplate.design);
+  }
+  renderShotRetakeBar();
+  setGifPhotos(animationFrames);
+  lastCaptureSettings = { count: frames.length, orientation: stripOrientation, aspect: currentAspectRatio, frame: savedFrame };
+  renderEditorFilterRow();
+  renderEditorFrameRow();
+  renderEditorBgColorRow();
+  syncEditorTabState();
+  switchEditorTool('filter');
 }
 
 document.querySelector('#shotReplaceUploader')?.addEventListener('change', async e => {
@@ -2678,6 +2865,10 @@ document.querySelector('#shotReplaceUploader')?.addEventListener('change', async
     const newCanvas = await fileToFittedCanvas(file, ratio);
     capturedFrames[idx] = newCanvas;
     capturedGifFrames[idx] = snapshotGifFrame(newCanvas, null);
+    if (capturedLiveClips.length > idx) {
+      capturedLiveClips[idx] = [newCanvas];
+      setLiveClips([...capturedLiveClips]);
+    }
     rebuildEditorStrip();
     renderShotRetakeBar();
     setGifPhotos([...capturedGifFrames]);
@@ -2715,27 +2906,16 @@ document.querySelector('#stripPhotoUploader')?.addEventListener('change', async 
     const decoration = await loadStripDecoration(selectedStripFrame, outputLayout.width, outputLayout.height);
     const savedFrame = serializeCaptureFrame(selectedStripFrame, decoration, outputLayout);
 
-    activeEditorFilter = 'none';
-    capturedFrames = frames;
-    capturedGifFrames = animationFrames;
-    capturedContext = {
-      frame: selectedStripFrame,
+    await openStripInEditor({
+      frames,
+      animationFrames,
+      liveClips: [],
+      filterCss: 'none',
       decoration,
       aspectRatio: baseAspect,
       frameLayout,
-      stripOrientation
-    };
-    setTargetCanvas(canvasElement);
-    getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id, { recordHistory: false }));
-    clearDoodle();
-    resetHistory();
-    rebuildEditorStrip();
-    renderShotRetakeBar();
-    setGifPhotos(animationFrames);
-    lastCaptureSettings = { count: frames.length, orientation: stripOrientation, aspect: currentAspectRatio, frame: savedFrame };
-    renderEditorFilterRow();
-    renderEditorFrameRow();
-    renderEditorBgColorRow();
+      savedFrame
+    });
     hasChosenStrip = true;
     switchTab('editor');
     showToast(`นำเข้า ${frames.length} ภาพจัดเป็น Photo Strip แล้ว!`, 'success');
@@ -2854,8 +3034,22 @@ async function handleCapture() {
         countdownNumber.textContent = remaining > 0 ? String(remaining) : '📸';
       }, resolve));
       countdownOverlay.classList.remove('active');
-      triggerScreenFlash();
-      const newFrame = captureSingleFrame(filterOptions);
+      let newFrame;
+      if (liveVideoMode && capturedLiveClips.length > singleRetakeIndex) {
+        updateStatus(true, `🎬 กำลังอัดคลิป Live Strip ซ่อมช็อต ${singleRetakeIndex + 1}/${capturedFrames.length}...`);
+        const clip = await recordLiveShotClip(filterOptions);
+        capturedLiveClips[singleRetakeIndex] = clip;
+        setLiveClips([...capturedLiveClips]);
+        triggerScreenFlash();
+        newFrame = clip[clip.length - 1];
+      } else {
+        triggerScreenFlash();
+        newFrame = captureSingleFrame(filterOptions);
+        if (capturedLiveClips.length > singleRetakeIndex) {
+          capturedLiveClips[singleRetakeIndex] = [newFrame];
+          setLiveClips([...capturedLiveClips]);
+        }
+      }
       capturedFrames[singleRetakeIndex] = newFrame;
       capturedGifFrames[singleRetakeIndex] = snapshotGifFrame(newFrame, null);
       rebuildEditorStrip();
@@ -2929,29 +3123,17 @@ async function handleCapture() {
         }
       }
 
-      activeEditorFilter = filterCss;
-      capturedFrames = finalFrames;
-      capturedGifFrames = finalAnimFrames;
-      setLiveClips(finalLiveClips);
-      capturedContext = {
-        frame: selectedStripFrame,
+      await openStripInEditor({
+        frames: finalFrames,
+        animationFrames: finalAnimFrames,
+        liveClips: finalLiveClips,
+        filterCss,
         decoration,
         aspectRatio: aspect[0] / aspect[1],
         frameLayout,
-        stripOrientation
-      };
-      setTargetCanvas(canvasElement);
-      getLayers().filter(layer => layer.type !== 'base').forEach(layer => removeLayer(layer.id, { recordHistory: false }));
-      clearDoodle();
-      resetHistory();
-      rebuildEditorStrip();
-      if (activeCaptureTemplate) await loadTemplateDesign(activeCaptureTemplate.design);
-      renderShotRetakeBar();
-      setGifPhotos(finalAnimFrames);
-      lastCaptureSettings = { count, orientation: stripOrientation, aspect: currentAspectRatio, frame: savedFrame };
-      renderEditorFilterRow();
-      renderEditorFrameRow();
-      renderEditorBgColorRow();
+        savedFrame,
+        applyTemplateDesign: true
+      });
       completed = true;
     }
   } catch (err) {
@@ -2973,37 +3155,31 @@ async function handleCapture() {
 function loadStripDecoration(frame = selectedStripFrame, width = null, height = null) {
   if (!frame) return Promise.resolve(null);
   const src = (width && height ? buildBuiltinFrameDataUrl(frame.id, width, height) : null) || frame.src;
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('โหลดกรอบไม่สำเร็จ กรุณาเลือกกรอบใหม่แล้วลองอีกครั้ง'));
-    img.src = src;
+  return loadImage(src).catch(() => {
+    throw new Error('โหลดกรอบไม่สำเร็จ กรุณาเลือกกรอบใหม่แล้วลองอีกครั้ง');
   });
 }
 
 document.querySelector('#tabSetup').addEventListener('click', () => switchTab('setup'));
 document.querySelector('#btnChangeStripFrame').addEventListener('click', () => switchTab('setup'));
-document.querySelector('#btnToggleCamUI')?.addEventListener('click', event => {
-  const cameraView = document.querySelector('#viewCamera');
-  const isClean = cameraView.classList.toggle('cam-clean-mode');
-  event.currentTarget.setAttribute('aria-pressed', String(isClean));
-  event.currentTarget.textContent = isClean ? '👁️ แสดงปุ่ม' : '👁️ ซ่อนปุ่ม';
-});
 document.querySelector('#btnBeginStrip').addEventListener('click', () => {
   hasChosenStrip = true;
   switchTab('camera');
 });
-document.querySelector('#stripOrientation').addEventListener('change', event => {
-  stripOrientation = event.target.value;
-  renderStripSetup();
+document.querySelectorAll('#stripOrientationChips .setup-chip').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (activeCaptureTemplate || selectedStripFrame?.layout) return;
+    stripOrientation = btn.dataset.orientation;
+    renderStripSetup();
+  });
 });
-
-document.querySelector('#stripShotCount').addEventListener('change', event => {
-  if (activeCaptureTemplate || selectedStripFrame?.layout) { renderStripSetup(); return; }
-  activeBurstCount = Number(event.target.value);
-  burstBadge.textContent = `${activeBurstCount}x`;
-  renderStripSetup();
+document.querySelectorAll('#stripShotCountChips .setup-chip').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (activeCaptureTemplate || selectedStripFrame?.layout) return;
+    activeBurstCount = Number(btn.dataset.count);
+    if (burstBadge) burstBadge.textContent = `${activeBurstCount}x`;
+    renderStripSetup();
+  });
 });
 
 const customFrameUploadDialog = document.querySelector('#customFrameUploadDialog');
@@ -3029,24 +3205,10 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
     }
     if (file.size > 15 * 1024 * 1024) throw new Error('กรุณาเลือกไฟล์ขนาดไม่เกิน 15 MB');
     let manuallySelected = false;
-    const manual = document.querySelector('#stripCutoutMode').value === 'manual';
-    let source = file;
-    if (manual) {
-      status.textContent = 'เลือกช่องภาพที่ต้องการเจาะในกรอบ';
-      source = await openCutoutPicker(file, true);
-      manuallySelected = true;
-      if (!source) {
-        status.textContent = 'ยกเลิกการเพิ่มกรอบแล้ว';
-        return;
-      }
-    }
     status.textContent = 'กำลังตรวจสอบกรอบ…';
-    url = URL.createObjectURL(source);
-    const img = new Image();
-    await new Promise((resolve, reject) => {
-      img.onload = resolve;
-      img.onerror = () => reject(new Error('ไม่สามารถอ่านไฟล์รูปนี้ได้'));
-      img.src = url;
+    url = URL.createObjectURL(file);
+    let img = await loadImage(url).catch(() => {
+      throw new Error('ไม่สามารถอ่านไฟล์รูปนี้ได้');
     });
     const check = document.createElement('canvas');
     check.width = Math.min(img.naturalWidth, 512);
@@ -3059,14 +3221,14 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
     for (let i = 3; i < pixels.length; i += 4) {
       if (pixels[i] < 128) { transparent = true; break; }
     }
-    if (!transparent && !manual) {
-      status.textContent = 'กำลังเจาะช่องใส่รูปอัตโนมัติ…';
-      // Allow the progress message to paint before processing the image.
+    if (!transparent) {
+      status.textContent = 'กำลังค้นหาช่องใส่รูปอัตโนมัติ…';
       await new Promise(resolve => setTimeout(resolve, 0));
       const result = await cutoutFrameSlots(file, {
         detectOnly: true,
         onProgress: progress => { status.textContent = progress.message; }
       });
+      customFrameUploadDialog?.close();
       const processed = await openCutoutPicker(file, true, result.candidates);
       manuallySelected = true;
       if (!processed) {
@@ -3075,10 +3237,8 @@ document.querySelector('#stripFrameUpload').addEventListener('change', async eve
       }
       URL.revokeObjectURL(url);
       url = URL.createObjectURL(processed);
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = () => reject(new Error('ไม่สามารถอ่านกรอบหลังเจาะช่องได้'));
-        img.src = url;
+      img = await loadImage(url).catch(() => {
+        throw new Error('ไม่สามารถอ่านกรอบหลังเจาะช่องได้');
       });
       ctx.clearRect(0, 0, check.width, check.height);
       ctx.drawImage(img, 0, 0, check.width, check.height);

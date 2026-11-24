@@ -12,10 +12,119 @@
 }
 
 .cam-header-title {
-  padding: 0.7rem 1rem 0.3rem 1rem;
+  padding: 0.75rem 1rem 0.45rem 1rem;
   font-size: 0.95rem;
   font-weight: 800;
   color: var(--accent);
+}
+
+.cam-summary-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.cam-modes-badge {
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 0.18rem 0.6rem;
+  border-radius: var(--r-pill);
+  background: var(--lav-tint);
+  color: var(--lav-ink);
+  border: 1px solid var(--lav);
+}
+
+.cam-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 1rem 0.85rem;
+}
+
+.cam-filter-strip-wrap {
+  width: 100%;
+  max-width: 640px;
+}
+
+.cam-filter-strip {
+  padding: 0.25rem 0.1rem;
+  gap: 0.55rem;
+}
+
+.cam-filter-strip .filter-item {
+  flex: 0 0 74px;
+  height: 82px;
+  padding: 0.35rem;
+}
+
+.cam-filter-strip .filter-swatch-box {
+  width: 38px;
+  height: 38px;
+}
+
+/* Camera Settings Dialog */
+.cam-settings-dialog {
+  width: min(460px, calc(100vw - 2rem));
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.settings-section-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.settings-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.settings-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.settings-slider-row input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.settings-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.settings-toggles .btn {
+  flex: 1 1 100px;
 }
 
 .cam-studio-wrapper {
